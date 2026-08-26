@@ -50,11 +50,10 @@ fn bc_rec(
         return false; // cycle
     }
     for rule in rules {
-        if rule.head == goal {
-            if rule.body.iter().all(|b| bc_rec(b, facts, rules, visited)) {
+        if rule.head == goal
+            && rule.body.iter().all(|b| bc_rec(b, facts, rules, visited)) {
                 return true;
             }
-        }
     }
     false
 }

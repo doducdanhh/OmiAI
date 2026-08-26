@@ -115,7 +115,8 @@ impl AutopoieticLoop {
     /// Evolve a policy whose fitness is `−FE(policy(features), target)`.
     fn evolve_policy(&self, target: &[f64]) -> GeneticProgram {
         let t = target.to_vec();
-        let p = GeneticProgram::evolve(
+        
+        GeneticProgram::evolve(
             8,
             1,
             4,
@@ -127,8 +128,7 @@ impl AutopoieticLoop {
                 mse_to_fitness(&pred, &t)
             },
             self.rounds.max(1),
-        );
-        p
+        )
     }
 
     /// Find the most-recent free energy.

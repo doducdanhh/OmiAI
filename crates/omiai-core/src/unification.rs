@@ -119,11 +119,10 @@ fn occurs(var: &str, term: &Term, subst: &Substitution) -> bool {
 }
 
 fn bind_var(var: String, term: Term, subst: &mut Substitution) -> Result<(), UnificationError> {
-    if let Term::Var(v2) = &term {
-        if *v2 == var {
+    if let Term::Var(v2) = &term
+        && *v2 == var {
             return Ok(());
         }
-    }
     if occurs(&var, &term, subst) {
         return Err(UnificationError::OccursCheckFailed { var, term });
     }

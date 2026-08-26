@@ -11,7 +11,6 @@
 
 #![allow(dead_code)]
 
-use omiai_core as core;
 
 pub mod abduction;
 pub mod discocat;

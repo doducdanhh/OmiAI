@@ -13,12 +13,16 @@ pub fn single_point(
         return (vec![], vec![]);
     }
     let point = rng.gen_range(0..n);
-    let mut c1 = parent_a[..n].to_vec();
-    let mut c2 = parent_b[..n].to_vec();
-    for i in point..n {
-        c1[i] = parent_b[i];
-        c2[i] = parent_a[i];
-    }
+    let c1: Vec<f64> = parent_a[..point]
+        .iter()
+        .chain(&parent_b[point..n])
+        .copied()
+        .collect();
+    let c2: Vec<f64> = parent_b[..point]
+        .iter()
+        .chain(&parent_a[point..n])
+        .copied()
+        .collect();
     (c1, c2)
 }
 
@@ -50,12 +54,16 @@ pub fn single_point_usize(
         return (vec![], vec![]);
     }
     let point = rng.gen_range(0..n);
-    let mut c1 = parent_a[..n].to_vec();
-    let mut c2 = parent_b[..n].to_vec();
-    for i in point..n {
-        c1[i] = parent_b[i];
-        c2[i] = parent_a[i];
-    }
+    let c1: Vec<usize> = parent_a[..point]
+        .iter()
+        .chain(&parent_b[point..n])
+        .copied()
+        .collect();
+    let c2: Vec<usize> = parent_b[..point]
+        .iter()
+        .chain(&parent_a[point..n])
+        .copied()
+        .collect();
     (c1, c2)
 }
 

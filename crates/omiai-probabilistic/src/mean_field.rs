@@ -22,7 +22,10 @@
 
 use std::collections::HashMap;
 
-use super::bayesian::{BayesianNetwork, Cpt};
+#[cfg(test)]
+use super::bayesian::Cpt;
+
+use super::bayesian::BayesianNetwork;
 
 /// Result of mean-field inference: per-variable marginals `q_i(X_i = true)`
 /// and the history of free-energy values across iterations.
@@ -138,7 +141,7 @@ pub fn mean_field(
                         .parents
                         .iter()
                         .enumerate()
-                        .filter(|(i, p)| *p != &cpt.variable)
+                        .filter(|(_i, p)| *p != &cpt.variable)
                         .map(|(i, p)| (i, q.get(p).copied().unwrap_or(0.5)))
                         .collect();
                     let idx_in_child =
@@ -233,7 +236,7 @@ fn free_energy(
 ) -> f64 {
     let mut fe = 0.0;
     // Entropy term: -Σ_i [q_i log q_i + (1-q_i) log(1-q_i)]
-    for (_, &p) in q {
+    for &p in q.values() {
         let p = p.clamp(1e-12, 1.0 - 1e-12);
         fe -= p * p.ln() + (1.0 - p) * (1.0 - p).ln();
     }

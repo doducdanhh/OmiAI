@@ -61,7 +61,9 @@ impl LtlFormula {
     pub fn atom(s: impl Into<String>) -> Self {
         LtlFormula::Atom(s.into())
     }
-    pub fn not(f: LtlFormula) -> Self {
+    /// Negation constructor (named `neg` to avoid clashing with `std::ops::Not`).
+    #[allow(clippy::should_implement_trait)]
+    pub fn neg(f: LtlFormula) -> Self {
         LtlFormula::Not(Box::new(f))
     }
     pub fn and(a: LtlFormula, b: LtlFormula) -> Self {
@@ -268,12 +270,11 @@ fn expand_at_state(state: &mut BTreeSet<LtlFormula>) {
                         changed = true;
                     }
                 }
-                LtlFormula::Until(_p, q) => {
+                LtlFormula::Until(_p, q)
                     // p U q ≡ q ∨ (p ∧ X(p U q))
-                    if state.insert((**q).clone()) {
+                    if state.insert((**q).clone()) => {
                         changed = true;
                     }
-                }
                 _ => {}
             }
         }
@@ -301,11 +302,10 @@ fn is_consistent(state: &BTreeSet<LtlFormula>, atom_vec: &[String]) -> bool {
 /// a state to be a valid prefix.
 fn eventualities_fulfilled(state: &BTreeSet<LtlFormula>) -> bool {
     for f in state {
-        if let LtlFormula::Eventually(p) = f {
-            if !state.contains(p) {
+        if let LtlFormula::Eventually(p) = f
+            && !state.contains(p) {
                 return false;
             }
-        }
     }
     true
 }
@@ -446,7 +446,7 @@ mod tests {
     fn p_and_not_p_is_unsatisfiable() {
         let f = LtlFormula::and(
             LtlFormula::atom("p"),
-            LtlFormula::not(LtlFormula::atom("p")),
+            LtlFormula::neg(LtlFormula::atom("p")),
         );
         assert!(!is_satisfiable(&f, 100));
     }
@@ -468,19 +468,19 @@ mod tests {
         // F p ∧ ¬F p is unsat
         let f = LtlFormula::and(
             LtlFormula::f(LtlFormula::atom("p")),
-            LtlFormula::not(LtlFormula::f(LtlFormula::atom("p"))),
+            LtlFormula::neg(LtlFormula::f(LtlFormula::atom("p"))),
         );
         assert!(!is_satisfiable(&f, 100));
     }
 
     #[test]
     fn nnf_pushes_negation_inward() {
-        let f = LtlFormula::not(LtlFormula::f(LtlFormula::atom("p")));
+        let f = LtlFormula::neg(LtlFormula::f(LtlFormula::atom("p")));
         let nnf = to_nnf(&f);
         // ¬F p ≡ G ¬p
         match nnf {
             LtlFormula::Globally(inner) => {
-                assert_eq!(*inner, LtlFormula::not(LtlFormula::atom("p")));
+                assert_eq!(*inner, LtlFormula::neg(LtlFormula::atom("p")));
             }
             other => panic!("expected G, got {:?}", other),
         }
@@ -489,15 +489,15 @@ mod tests {
     #[test]
     fn nnf_handles_until_negation() {
         // ¬(p U q) ≡ ¬p R ¬q
-        let f = LtlFormula::not(LtlFormula::until(
+        let f = LtlFormula::neg(LtlFormula::until(
             LtlFormula::atom("p"),
             LtlFormula::atom("q"),
         ));
         let nnf = to_nnf(&f);
         match nnf {
             LtlFormula::Release(a, b) => {
-                assert_eq!(*a, LtlFormula::not(LtlFormula::atom("p")));
-                assert_eq!(*b, LtlFormula::not(LtlFormula::atom("q")));
+                assert_eq!(*a, LtlFormula::neg(LtlFormula::atom("p")));
+                assert_eq!(*b, LtlFormula::neg(LtlFormula::atom("q")));
             }
             other => panic!("expected Release, got {:?}", other),
         }
@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn nnf_double_negation_eliminates() {
-        let f = LtlFormula::not(LtlFormula::not(LtlFormula::atom("p")));
+        let f = LtlFormula::neg(LtlFormula::neg(LtlFormula::atom("p")));
         let nnf = to_nnf(&f);
         assert_eq!(nnf, LtlFormula::atom("p"));
     }

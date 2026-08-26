@@ -43,13 +43,12 @@ impl CausalDag {
             }
         }
         while let Some(cur) = q.pop_front() {
-            if out.insert(cur.clone()) {
-                if let Some(ps) = self.parents.get(&cur) {
+            if out.insert(cur.clone())
+                && let Some(ps) = self.parents.get(&cur) {
                     for p in ps {
                         q.push_back(p.clone());
                     }
                 }
-            }
         }
         out
     }
@@ -64,13 +63,12 @@ impl CausalDag {
             }
         }
         while let Some(cur) = q.pop_front() {
-            if out.insert(cur.clone()) {
-                if let Some(cs) = self.children.get(&cur) {
+            if out.insert(cur.clone())
+                && let Some(cs) = self.children.get(&cur) {
                     for c in cs {
                         q.push_back(c.clone());
                     }
                 }
-            }
         }
         out
     }
@@ -142,13 +140,12 @@ impl CausalDag {
                 // (or has desc in Z), we can go up to its parents — handled when
                 // from_child on the collider...
                 // When arriving down at node, also try parents if node is collider-activated
-                if has_desc_in_z.get(&node).copied().unwrap_or(false) {
-                    if let Some(ps) = self.parents.get(&node) {
+                if has_desc_in_z.get(&node).copied().unwrap_or(false)
+                    && let Some(ps) = self.parents.get(&node) {
                         for p in ps {
                             queue.push_back((p.clone(), true));
                         }
                     }
-                }
             }
         }
         false

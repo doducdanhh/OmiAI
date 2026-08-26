@@ -166,8 +166,8 @@ fn main() {
     // Train via RLS
     println!("Training readout via RLS for 300 timesteps...");
     let mut rng_state = 12345u64;
-    for i in 0..300 {
-        let _ = reservoir.step(&inputs[i]);
+    for input in inputs.iter().take(300) {
+        let _ = reservoir.step(input);
         // RLS update happens inside train_readout if we call it
         // one step at a time. For demo simplicity we just step and
         // let the natural ESN dynamics carry forward.

@@ -135,9 +135,9 @@ fn ols_solve(x: &[Vec<f64>], y: &[f64]) -> Option<Vec<f64>> {
         // Find max in column
         let mut max_r = col;
         let mut max_v = aug[col][col].abs();
-        for r in (col + 1)..p {
-            if aug[r][col].abs() > max_v {
-                max_v = aug[r][col].abs();
+        for (r, row) in aug.iter().enumerate().skip(col + 1) {
+            if row[col].abs() > max_v {
+                max_v = row[col].abs();
                 max_r = r;
             }
         }
@@ -147,8 +147,8 @@ fn ols_solve(x: &[Vec<f64>], y: &[f64]) -> Option<Vec<f64>> {
         aug.swap(col, max_r);
         // Normalize pivot row
         let div = aug[col][col];
-        for j in 0..=p {
-            aug[col][j] /= div;
+        for cell in aug[col].iter_mut() {
+            *cell /= div;
         }
         // Eliminate
         for r in 0..p {
@@ -156,8 +156,9 @@ fn ols_solve(x: &[Vec<f64>], y: &[f64]) -> Option<Vec<f64>> {
                 continue;
             }
             let f = aug[r][col];
-            for j in 0..=p {
-                aug[r][j] -= f * aug[col][j];
+            let pivot_row = aug[col].clone();
+            for (aug_rj, &aug_cj) in aug[r].iter_mut().zip(pivot_row.iter()) {
+                *aug_rj -= f * aug_cj;
             }
         }
     }

@@ -124,7 +124,7 @@ impl Ontology {
         for (c, d) in &self.subclass_closure {
             supers.entry(c.clone()).or_default().insert(d.clone());
         }
-        for (_c, sups) in &supers {
+        for sups in supers.values() {
             let list: Vec<_> = sups.iter().collect();
             for i in 0..list.len() {
                 for j in (i + 1)..list.len() {

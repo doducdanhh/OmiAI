@@ -152,11 +152,10 @@ fn pure_literal_assign(clauses: &mut Vec<Vec<Literal>>, assignment: &mut HashMap
             changed = true;
         }
     }
-    if changed {
-        if let Some(simplified) = simplify_clauses(clauses, assignment) {
+    if changed
+        && let Some(simplified) = simplify_clauses(clauses, assignment) {
             *clauses = simplified;
         }
-    }
 }
 
 fn pick_branch_var(clauses: &[Vec<Literal>], assignment: &HashMap<String, bool>) -> Option<String> {
@@ -190,23 +189,21 @@ fn dpll_rec(clauses: &mut Vec<Vec<Literal>>, assignment: &mut HashMap<String, bo
     {
         let mut a = assignment.clone();
         a.insert(var.clone(), true);
-        if let Some(mut simplified) = simplify_clauses(clauses, &a) {
-            if dpll_rec(&mut simplified, &mut a) {
+        if let Some(mut simplified) = simplify_clauses(clauses, &a)
+            && dpll_rec(&mut simplified, &mut a) {
                 *assignment = a;
                 return true;
             }
-        }
     }
     // Branch false
     {
         let mut a = assignment.clone();
         a.insert(var, false);
-        if let Some(mut simplified) = simplify_clauses(clauses, &a) {
-            if dpll_rec(&mut simplified, &mut a) {
+        if let Some(mut simplified) = simplify_clauses(clauses, &a)
+            && dpll_rec(&mut simplified, &mut a) {
                 *assignment = a;
                 return true;
             }
-        }
     }
     false
 }

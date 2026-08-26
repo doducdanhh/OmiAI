@@ -136,11 +136,10 @@ impl Csp {
                 assignment.insert(var.clone(), value);
                 // Forward check: snapshot domains
                 let snapshot = self.domains.clone();
-                if self.forward_check(&var, value, assignment) {
-                    if let Some(sol) = self.backtrack(assignment) {
+                if self.forward_check(&var, value, assignment)
+                    && let Some(sol) = self.backtrack(assignment) {
                         return Some(sol);
                     }
-                }
                 self.domains = snapshot;
                 assignment.remove(&var);
             }

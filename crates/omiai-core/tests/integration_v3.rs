@@ -162,7 +162,7 @@ fn ltl_tautology_satisfiable() {
 fn ltl_contradiction_unsatisfiable() {
     let f = LtlFormula::and(
         LtlFormula::atom("p"),
-        LtlFormula::not(LtlFormula::atom("p")),
+        LtlFormula::neg(LtlFormula::atom("p")),
     );
     assert!(!is_satisfiable(&f, 100));
 }
@@ -187,7 +187,7 @@ fn ltl_until_with_fulfillment() {
 
 #[test]
 fn modal_box_vacuous_in_single_world() {
-    let mut m = KripkeStructure::new(vec![0]);
+    let m = KripkeStructure::new(vec![0]);
     assert!(satisfies(
         &m,
         0,
@@ -235,7 +235,7 @@ fn modal_diamond_box_duality() {
     // ◇φ ≡ ¬□¬φ  for any model/world
     let m = two_world_model("p", false, true);
     let diamond_p = ModalFormula::diamond(ModalFormula::atom("p"));
-    let neg_box_not_p = ModalFormula::not(ModalFormula::box_(ModalFormula::not(
+    let neg_box_not_p = ModalFormula::neg(ModalFormula::box_(ModalFormula::neg(
         ModalFormula::atom("p"),
     )));
     for w in &m.worlds {

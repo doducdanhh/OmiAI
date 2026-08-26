@@ -27,7 +27,7 @@ fn bench_rls_train(c: &mut Criterion) {
     let mut group = c.benchmark_group("ESN_rls_train");
     group.measurement_time(Duration::from_secs(5));
     for &size in &[100usize, 200, 500] {
-        let mut r = Reservoir::new(size, 1, 1, 0.9, 7);
+        let r = Reservoir::new(size, 1, 1, 0.9, 7);
         let inputs: Vec<Vec<f64>> = (0..100).map(|t| vec![(t as f64 * 0.1).sin()]).collect();
         let targets: Vec<Vec<f64>> = inputs.iter().map(|u| vec![u[0] * 0.5]).collect();
         group.throughput(Throughput::Elements((100 * size) as u64));

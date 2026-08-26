@@ -209,11 +209,10 @@ pub fn huet_step(state: UnifState) -> Option<UnifStep> {
     }
 
     // First, try to simplify a flex-flex pair into flex-rigid or solve.
-    if let Some(pair) = state.flex_flex.first().cloned() {
-        if let Some(branch) = simplify_flex_flex(&state, &pair) {
+    if let Some(pair) = state.flex_flex.first().cloned()
+        && let Some(branch) = simplify_flex_flex(&state, &pair) {
             return Some(branch);
         }
-    }
 
     // Otherwise, process a flex-rigid pair via imitation or projection.
     if let Some(fr) = state.flex_rigid.first().cloned() {

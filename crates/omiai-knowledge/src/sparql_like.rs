@@ -49,11 +49,10 @@ pub fn execute(store: &TripleStore, query: &Query) -> Vec<Solution> {
             let grounded = ground_pattern(pattern, sol);
             let matches = store.match_pattern(&grounded);
             for triple in matches {
-                if let Some(extended) = extend_solution(sol, pattern, &triple) {
-                    if passes_filters(&extended, &query.filters) {
+                if let Some(extended) = extend_solution(sol, pattern, &triple)
+                    && passes_filters(&extended, &query.filters) {
                         next_solutions.push(extended);
                     }
-                }
             }
         }
         solutions = next_solutions;

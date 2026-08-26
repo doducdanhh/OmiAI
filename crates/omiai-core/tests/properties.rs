@@ -41,8 +41,8 @@ use proptest::prelude::*;
 /// A strategy that produces [`Term`]s of bounded depth.
 fn term_strategy() -> impl Strategy<Value = Term> {
     let leaf = prop_oneof![
-        (".+").prop_map(|s| Term::Var(s)),
-        (".+").prop_map(|s| Term::Const(s)),
+        (".+").prop_map(Term::Var),
+        (".+").prop_map(Term::Const),
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
         (
@@ -210,9 +210,9 @@ fn ground_atoms(f: &Formula, out: &mut std::collections::BTreeSet<String>) {
     }
 }
 
-/// Check semantic equivalence `F ⇔ CNF(F)` over **all** assignments of
-/// the atoms appearing in `F`. (Limited to small atom counts to keep the
-/// test tractable.)
+// Check semantic equivalence `F ⇔ CNF(F)` over **all** assignments of
+// the atoms appearing in `F`. (Limited to small atom counts to keep the
+// test tractable.)
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(80))]
     #[test]
@@ -294,12 +294,7 @@ proptest! {
         prop_assert!((0.0..=1.0).contains(&p_true), "P out of range: {}", p_true);
         let p_false = bn.variable_elimination("Sprinkler", &ev);
         prop_assert!((0.0..=1.0).contains(&p_false));
-        // Sum-to-one: query Rain vs ¬Rain must sum to 1
-        let mut ev_not = ev.clone();
-        if !rain_obs {
-            // If Rain unobserved, marginalize both ways.
-        }
-        let _ = p_true + p_false; // both finite
+        let _ = (p_true, p_false); // both finite and in range above
     }
 }
 

@@ -37,11 +37,10 @@ impl GoalSystem {
         priority: f64,
     ) -> String {
         let id = Uuid::new_v4().to_string();
-        if let Some(ref p) = parent {
-            if let Some(pg) = self.goals.iter_mut().find(|g| g.id == *p) {
+        if let Some(ref p) = parent
+            && let Some(pg) = self.goals.iter_mut().find(|g| g.id == *p) {
                 pg.children.push(id.clone());
             }
-        }
         self.goals.push(Goal {
             id: id.clone(),
             description: description.into(),
@@ -83,11 +82,10 @@ impl GoalSystem {
                 })
                 .collect();
             for (id, sat) in snapshot {
-                if let Some(g) = self.goals.iter_mut().find(|g| g.id == id) {
-                    if !g.children.is_empty() {
+                if let Some(g) = self.goals.iter_mut().find(|g| g.id == id)
+                    && !g.children.is_empty() {
                         g.satisfied = sat;
                     }
-                }
             }
         }
     }

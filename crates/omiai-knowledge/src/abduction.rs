@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn unique_minimal_explanation() {
         let rains = Formula::prop("rain");
-        let sprinkler = Formula::prop("sprinkler");
+        let _sprinkler = Formula::prop("sprinkler");
         let wet = Formula::prop("wet");
         // Only `rains ⇒ wet`; `sprinkler` is unrelated.
         let rule = Formula::Implies(Box::new(rains.clone()), Box::new(wet.clone()));

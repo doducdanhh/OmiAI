@@ -137,7 +137,7 @@ fn kg_forward_and_backward_chain_pipeline() {
     // Forward-chain from "socrates type human" + rules:
     //   mortal(X) ← human(X)
     //   philosopher(X) ← human(X)
-    let mut facts: std::collections::HashSet<String> =
+    let facts: std::collections::HashSet<String> =
         ["human_socrates".into()].into_iter().collect();
     let rules = vec![
         HornRule {

@@ -87,11 +87,10 @@ impl ChatEngine {
         match message.intent {
             ParseIntent::Assert => {
                 if let Some(formula) = message.formula {
-                    if let Formula::Atom(_, args) = &formula {
-                        if let Some(Term::Const(entity)) = args.first() {
+                    if let Formula::Atom(_, args) = &formula
+                        && let Some(Term::Const(entity)) = args.first() {
                             memory.focus_entity(entity.clone());
                         }
-                    }
                     memory.push_fact(formula.clone());
                     (
                         ParseIntent::Assert,
