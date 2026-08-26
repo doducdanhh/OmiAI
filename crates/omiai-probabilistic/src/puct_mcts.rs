@@ -161,7 +161,22 @@ impl<S: GameState> PuctMcts<S> {
                     .collect();
 
                 let action = if !unvisited.is_empty() {
-                    unvisited[0].clone()
+                    // Prefer the unvisited action with the highest known
+                    // prior so the policy actually steers expansion.
+                    let child_prior = |a: &S::Action| -> f64 {
+                        let mut p = path.clone();
+                        p.push(action_ids[a]);
+                        tree.get(&p).map(|s| s.prior).unwrap_or(0.0)
+                    };
+                    unvisited
+                        .iter()
+                        .max_by(|a, b| {
+                            child_prior(a)
+                                .partial_cmp(&child_prior(b))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .cloned()
+                        .unwrap()
                 } else {
                     let parent_visits = tree.get(&path).map(|s| s.visits).unwrap_or(1) as f64;
                     let parent_visits_sqrt = parent_visits.sqrt();
@@ -188,10 +203,11 @@ impl<S: GameState> PuctMcts<S> {
                 path.push(id);
                 state = state.apply(&action);
 
-                // If newly expanded, break
+                // If newly expanded, record the policy's prior for it
                 if tree.get(&path).map(|s| s.visits).unwrap_or(0) == 0 {
                     let s = tree.entry(path.clone()).or_default();
-                    s.prior = 1.0 / actions.len().max(1) as f64;
+                    let pri = priors.get(actions.iter().position(|a| a == &action).unwrap_or(0));
+                    s.prior = pri.copied().unwrap_or(1.0 / actions.len().max(1) as f64);
                     break;
                 }
             }

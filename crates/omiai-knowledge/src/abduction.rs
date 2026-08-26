@@ -123,9 +123,11 @@ pub fn abduce(
         }
         for combo in combinations(assumables, size) {
             let h: BTreeSet<String> = combo.into_iter().collect();
-            if !is_consistent(kb, &Formula::Not(Box::new(observation.clone())), &h) {
-                continue;
-            }
+            // H explains obs iff KB ∪ H ∪ {¬obs} is UNSAT — i.e. NOT
+            // propositionally consistent. (Consistency of KB ∪ H alone is
+            // implied by the minimality check below.) The previous gate
+            // required the opposite polarity and rejected every valid
+            // explanation, so `abduce` always returned an empty set.
             if !entails(kb, observation, &h) {
                 continue;
             }

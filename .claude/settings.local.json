@@ -14,7 +14,14 @@
       "Bash(python3 -)",
       "Bash(cargo build *)",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(cd *)"
+      "Bash(cd *)",
+      "Bash(git commit -m 'wip\\(workspace\\): move modules into 15-crate layout, all crates compile *)",
+      "Bash(grep -E \"^test .* FAILED|failures:$\" -A20)",
+      "Bash(tee /tmp/test_full.log)",
+      "Bash(grep -cE \"^test .* ok$\")",
+      "Read(//tmp/**)",
+      "Bash(cargo run *)",
+      "Bash(python3 /tmp/hmc_sim.py)"
     ]
   }
 }
