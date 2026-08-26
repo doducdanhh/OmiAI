@@ -54,8 +54,8 @@ impl Reservoir {
         // P = (1/δ) I for RLS
         let delta = 1.0;
         let mut p_matrix = vec![vec![0.0; size]; size];
-        for i in 0..size {
-            p_matrix[i][i] = 1.0 / delta;
+        for (i, row) in p_matrix.iter_mut().enumerate() {
+            row[i] = 1.0 / delta;
         }
         Self {
             size,
@@ -91,9 +91,9 @@ impl Reservoir {
         let rec = matvec(&self.w, &self.state);
         let inp = matvec(&self.w_in, &u[..self.input_dim]);
         let alpha = self.leak_rate;
-        for i in 0..self.size {
+        for (i, st) in self.state.iter_mut().enumerate() {
             let pre = rec[i] + inp.get(i).copied().unwrap_or(0.0);
-            self.state[i] = (1.0 - alpha) * self.state[i] + alpha * pre.tanh();
+            *st = (1.0 - alpha) * *st + alpha * pre.tanh();
         }
         self.readout()
     }
@@ -123,9 +123,9 @@ impl Reservoir {
         let n = self.size;
         // k = P x / (1 + x^T P x)
         let mut px = vec![0.0; n];
-        for i in 0..n {
-            for j in 0..n {
-                px[i] += self.p_matrix[i][j] * x[j];
+        for (p_i, row) in px.iter_mut().zip(self.p_matrix.iter()) {
+            for (xj, pij) in x.iter().zip(row.iter()) {
+                *p_i += pij * xj;
             }
         }
         let denom: f64 = 1.0 + x.iter().zip(px.iter()).map(|(xi, pi)| xi * pi).sum::<f64>();
@@ -133,25 +133,25 @@ impl Reservoir {
 
         // error e = y_d - W_out x
         let y = self.readout();
-        for o in 0..self.output_dim {
+        for (o, w_row) in self.w_out.iter_mut().enumerate() {
             let yd = target.get(o).copied().unwrap_or(0.0);
             let e = yd - y.get(o).copied().unwrap_or(0.0);
-            for j in 0..n {
-                self.w_out[o][j] += e * k[j];
+            for (kj, w) in k.iter().zip(w_row.iter_mut()) {
+                *w += e * kj;
             }
         }
 
         // P ← P - k (x^T P)
         // first compute x^T P
         let mut xtp = vec![0.0; n];
-        for j in 0..n {
-            for i in 0..n {
-                xtp[j] += x[i] * self.p_matrix[i][j];
+        for (j, xtp_j) in xtp.iter_mut().enumerate() {
+            for (xi, row) in x.iter().zip(self.p_matrix.iter()) {
+                *xtp_j += xi * row[j];
             }
         }
-        for i in 0..n {
-            for j in 0..n {
-                self.p_matrix[i][j] -= k[i] * xtp[j];
+        for ((k_i, row), xtp_j) in k.iter().zip(self.p_matrix.iter_mut()).zip(xtp.iter()) {
+            for w in row.iter_mut() {
+                *w -= k_i * xtp_j;
             }
         }
     }
@@ -165,31 +165,31 @@ impl Reservoir {
         }
         // X^T X + λI  and  X^T Y
         let mut xtx = vec![vec![0.0; n]; n];
-        for i in 0..n {
-            xtx[i][i] = ridge;
+        for (i, row) in xtx.iter_mut().enumerate() {
+            row[i] = ridge;
         }
         let out_dim = self.output_dim;
         let mut xty = vec![vec![0.0; out_dim]; n];
 
         for (s, y) in states.iter().zip(targets.iter()) {
-            for i in 0..n {
-                for j in 0..n {
-                    xtx[i][j] += s[i] * s[j];
+            for (i, xtx_row) in xtx.iter_mut().enumerate() {
+                for (j, cell) in xtx_row.iter_mut().enumerate() {
+                    *cell += s[i] * s[j];
                 }
-                for o in 0..out_dim {
-                    xty[i][o] += s[i] * y.get(o).copied().unwrap_or(0.0);
+                for (o, cell) in xty[i].iter_mut().enumerate() {
+                    *cell += s[i] * y.get(o).copied().unwrap_or(0.0);
                 }
             }
         }
         // Solve via Gauss-Jordan (small n)
         if let Some(inv) = invert_matrix(&xtx) {
-            for o in 0..out_dim {
-                for j in 0..n {
+            for (o, w_row) in self.w_out.iter_mut().enumerate() {
+                for (j, w) in w_row.iter_mut().enumerate() {
                     let mut sum = 0.0;
-                    for k in 0..n {
-                        sum += inv[j][k] * xty[k][o];
+                    for (k, inv_jk) in inv[j].iter().enumerate() {
+                        sum += inv_jk * xty[k][o];
                     }
-                    self.w_out[o][j] = sum;
+                    *w = sum;
                 }
             }
         }
@@ -232,8 +232,8 @@ fn invert_matrix(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = a.len();
     let mut m = a.to_vec();
     let mut inv = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        inv[i][i] = 1.0;
+    for (i, row) in inv.iter_mut().enumerate() {
+        row[i] = 1.0;
     }
     for col in 0..n {
         // Pivot

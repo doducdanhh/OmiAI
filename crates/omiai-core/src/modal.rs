@@ -64,7 +64,9 @@ impl ModalFormula {
     pub fn atom(s: impl Into<String>) -> Self {
         ModalFormula::Atom(s.into())
     }
-    pub fn not(f: ModalFormula) -> Self {
+    /// Negation constructor (named `neg` to avoid clashing with `std::ops::Not`).
+    #[allow(clippy::should_implement_trait)]
+    pub fn neg(f: ModalFormula) -> Self {
         ModalFormula::Not(Box::new(f))
     }
     pub fn and(a: ModalFormula, b: ModalFormula) -> Self {
@@ -271,7 +273,7 @@ mod tests {
         assert!(!satisfies(
             &m,
             0,
-            &ModalFormula::not(ModalFormula::atom("p"))
+            &ModalFormula::neg(ModalFormula::atom("p"))
         ));
     }
 
@@ -287,7 +289,7 @@ mod tests {
         assert!(satisfies(
             &m,
             0,
-            &ModalFormula::box_(ModalFormula::not(ModalFormula::atom("p")))
+            &ModalFormula::box_(ModalFormula::neg(ModalFormula::atom("p")))
         ));
     }
 
@@ -334,7 +336,7 @@ mod tests {
         // ◇φ ≡ ¬□¬φ  (classical modal duality)
         let m = two_world_model("p", false, true);
         let diamond_p = ModalFormula::diamond(ModalFormula::atom("p"));
-        let not_box_not_p = ModalFormula::not(ModalFormula::box_(ModalFormula::not(
+        let not_box_not_p = ModalFormula::neg(ModalFormula::box_(ModalFormula::neg(
             ModalFormula::atom("p"),
         )));
         assert_eq!(
@@ -347,7 +349,7 @@ mod tests {
     fn tautology_p_or_not_p_is_valid_in_any_model() {
         let f = ModalFormula::or(
             ModalFormula::atom("p"),
-            ModalFormula::not(ModalFormula::atom("p")),
+            ModalFormula::neg(ModalFormula::atom("p")),
         );
         let m = trivial_model(&["p".into()]);
         assert!(is_valid_in(&m, &f));
@@ -359,7 +361,7 @@ mod tests {
     fn small_validity_test_for_p_or_not_p() {
         let f = ModalFormula::or(
             ModalFormula::atom("p"),
-            ModalFormula::not(ModalFormula::atom("p")),
+            ModalFormula::neg(ModalFormula::atom("p")),
         );
         // Should be valid in all 1-world models
         assert!(is_valid_small(&f, 1, &["p".into()]));

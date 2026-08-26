@@ -174,22 +174,19 @@ impl TheoryBounds {
             .collect();
         for var in vars {
             if let Some(&e) = self.eq.get(&var) {
-                if let Some(&l) = self.lo.get(&var) {
-                    if e < l - f64::EPSILON {
+                if let Some(&l) = self.lo.get(&var)
+                    && e < l - f64::EPSILON {
                         return false;
                     }
-                }
-                if let Some(&h) = self.hi.get(&var) {
-                    if e > h + f64::EPSILON {
+                if let Some(&h) = self.hi.get(&var)
+                    && e > h + f64::EPSILON {
                         return false;
                     }
-                }
             }
-            if let (Some(&l), Some(&h)) = (self.lo.get(&var), self.hi.get(&var)) {
-                if l > h + f64::EPSILON {
+            if let (Some(&l), Some(&h)) = (self.lo.get(&var), self.hi.get(&var))
+                && l > h + f64::EPSILON {
                     return false;
                 }
-            }
         }
         true
     }

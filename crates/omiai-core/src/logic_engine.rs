@@ -636,7 +636,7 @@ mod tests {
         let mut val = HashMap::new();
         val.insert("P".to_string(), true);
         val.insert("Q".to_string(), false);
-        assert_eq!(evaluate(&f, &val).unwrap(), true);
+        assert!(evaluate(&f, &val).unwrap());
     }
 
     #[test]

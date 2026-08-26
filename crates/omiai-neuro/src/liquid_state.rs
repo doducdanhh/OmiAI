@@ -63,19 +63,19 @@ impl LiquidStateMachine {
             u.resize(self.input_dim, 0.0);
         }
         let mut i_syn = vec![0.0; self.n_neurons];
-        for i in 0..self.n_neurons {
-            for j in 0..self.n_neurons {
-                i_syn[i] += self.w[i][j] * self.spikes[j];
+        for (i, i_syn_i) in i_syn.iter_mut().enumerate() {
+            for (spike_j, wij) in self.spikes.iter().zip(self.w[i].iter()) {
+                *i_syn_i += wij * spike_j;
             }
-            for k in 0..self.input_dim {
-                i_syn[i] += self.w_in[i][k] * u[k];
+            for (u_k, w_ik) in u.iter().zip(self.w_in[i].iter()) {
+                *i_syn_i += w_ik * u_k;
             }
         }
-        for i in 0..self.n_neurons {
-            self.v[i] = self.leak * self.v[i] + i_syn[i];
-            if self.v[i] >= self.threshold {
+        for ((i, v_i), &i_syn_i) in self.v.iter_mut().enumerate().zip(i_syn.iter()) {
+            *v_i = self.leak * *v_i + i_syn_i;
+            if *v_i >= self.threshold {
                 self.spikes[i] = 1.0;
-                self.v[i] = self.v_rest;
+                *v_i = self.v_rest;
             } else {
                 self.spikes[i] = 0.0;
             }

@@ -29,14 +29,14 @@ impl Pomdp {
     pub fn update_belief(&self, belief: &[f64], action: usize, obs: usize) -> Vec<f64> {
         let a = action.min(self.n_actions.saturating_sub(1));
         let mut next = vec![0.0; self.n_states];
-        for sp in 0..self.n_states {
+        for (sp, next_sp) in next.iter_mut().enumerate() {
             let mut sum = 0.0;
-            for s in 0..self.n_states {
+            for (s, b_s) in belief.iter().enumerate() {
                 let t = self.transition[a][s][sp];
-                sum += t * belief.get(s).copied().unwrap_or(0.0);
+                sum += t * b_s;
             }
             let o = self.observation[a][sp].get(obs).copied().unwrap_or(0.0);
-            next[sp] = o * sum;
+            *next_sp = o * sum;
         }
         let z: f64 = next.iter().sum();
         if z < 1e-15 {
@@ -80,14 +80,14 @@ pub fn tiger_pomdp() -> Pomdp {
     let n_o = 2;
     let mut transition = vec![vec![vec![0.0; n_s]; n_s]; n_a];
     // listen: stay
-    for s in 0..n_s {
-        transition[0][s][s] = 1.0;
+    for (s, col) in transition[0].iter_mut().enumerate() {
+        col[s] = 1.0;
     }
     // open: reset to uniform-ish (absorb random)
-    for a in 1..n_a {
-        for s in 0..n_s {
-            transition[a][s][0] = 0.5;
-            transition[a][s][1] = 0.5;
+    for t_mat in transition.iter_mut().skip(1) {
+        for from in t_mat.iter_mut() {
+            from[0] = 0.5;
+            from[1] = 0.5;
         }
     }
     let mut observation = vec![vec![vec![0.0; n_o]; n_s]; n_a];
@@ -96,10 +96,10 @@ pub fn tiger_pomdp() -> Pomdp {
     observation[0][0][1] = 0.15;
     observation[0][1][0] = 0.15;
     observation[0][1][1] = 0.85;
-    for a in 1..n_a {
-        for s in 0..n_s {
-            observation[a][s][0] = 0.5;
-            observation[a][s][1] = 0.5;
+    for o_mat in observation.iter_mut().skip(1) {
+        for row in o_mat.iter_mut() {
+            row[0] = 0.5;
+            row[1] = 0.5;
         }
     }
     let mut reward = vec![vec![0.0; n_s]; n_a];

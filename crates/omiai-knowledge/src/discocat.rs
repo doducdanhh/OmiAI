@@ -228,7 +228,7 @@ pub fn reduce_transitive(np_subj: &LexEntry, tv: &LexEntry, np_obj: &LexEntry) -
     assert_eq!(np_obj.dim, dim, "object noun dim mismatch");
     let mut result = vec![0.0f64; dim];
     // result[k] = sum_{o, s} T[o][s][k] * np_obj[o] * np_subj[s]
-    for k in 0..dim {
+    for (k, r_k) in result.iter_mut().enumerate() {
         let mut acc = 0.0;
         for o in 0..dim {
             for s in 0..dim {
@@ -256,7 +256,7 @@ pub fn reduce_transitive(np_subj: &LexEntry, tv: &LexEntry, np_obj: &LexEntry) -
                 acc += t_val * subj_val * obj_val;
             }
         }
-        result[k] = acc;
+        *r_k = acc;
     }
     result
 }
@@ -325,19 +325,19 @@ pub fn toy_lexicon() -> Lexicon {
     lex.insert(LexEntry::noun("dog", vec![0.2, 0.0, 0.1, 0.9]));
     // Verb "likes": random tensor
     let mut likes = vec![vec![vec![0.0; dim]; dim]; dim];
-    for i in 0..dim {
-        for j in 0..dim {
-            for k in 0..dim {
-                likes[i][j][k] = ((i + j + k) as f64 * 0.07).sin();
+    for (i, plane) in likes.iter_mut().enumerate() {
+        for (j, row) in plane.iter_mut().enumerate() {
+            for (k, cell) in row.iter_mut().enumerate() {
+                *cell = ((i + j + k) as f64 * 0.07).sin();
             }
         }
     }
     lex.insert(LexEntry::transitive_verb("likes", likes));
     let mut sees = vec![vec![vec![0.0; dim]; dim]; dim];
-    for i in 0..dim {
-        for j in 0..dim {
-            for k in 0..dim {
-                sees[i][j][k] = ((i * 2 + j * 3 + k) as f64 * 0.05).cos();
+    for (i, plane) in sees.iter_mut().enumerate() {
+        for (j, row) in plane.iter_mut().enumerate() {
+            for (k, cell) in row.iter_mut().enumerate() {
+                *cell = ((i * 2 + j * 3 + k) as f64 * 0.05).cos();
             }
         }
     }

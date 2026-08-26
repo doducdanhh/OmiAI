@@ -90,10 +90,10 @@ impl Potential {
         };
         let n = 1usize << combined.len();
         let mut data = vec![0.0f64; n];
-        for mask in 0..n {
+        for (mask, cell) in data.iter_mut().enumerate() {
             let a = self.eval_mask(mask, &combined);
             let b = other.eval_mask(mask, &combined);
-            data[mask] = f(a, b);
+            *cell = f(a, b);
         }
         Potential {
             vars: combined,
@@ -355,7 +355,7 @@ impl JunctionTree {
             }
         }
         // Kruskal
-        edges.sort_by(|x, y| y.2.len().cmp(&x.2.len()));
+        edges.sort_by_key(|e| std::cmp::Reverse(e.2.len()));
         let mut parent: Vec<usize> = (0..cliques.len()).collect();
         fn find(parent: &mut Vec<usize>, x: usize) -> usize {
             if parent[x] != x {
@@ -623,13 +623,13 @@ fn cpt_to_potential(cpt: &Cpt) -> Potential {
     vars.push(cpt.variable.clone());
     let n = 1usize << vars.len();
     let mut data = vec![1.0f64; n];
-    for mask in 0..n {
+    for (mask, cell) in data.iter_mut().enumerate() {
         // mask layout: bits 0..len(parents) are parents; bit len(parents) is variable
         let parent_mask = mask & ((1 << cpt.parents.len()) - 1);
         let var_bit = (mask >> cpt.parents.len()) & 1;
         let pt = cpt.probs_true.get(parent_mask).copied().unwrap_or(0.5);
         let p = if var_bit == 1 { pt } else { 1.0 - pt };
-        data[mask] = p;
+        *cell = p;
     }
     Potential::new(vars, data)
 }

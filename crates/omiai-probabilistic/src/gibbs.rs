@@ -125,7 +125,7 @@ pub fn gibbs_sample(
         }
 
         // Record sample after burn-in, respecting thinning
-        if it >= config.burn_in && (it - config.burn_in) % config.thinning == 0 {
+        if it >= config.burn_in && (it - config.burn_in).is_multiple_of(config.thinning) {
             all_samples.push(assignment.clone());
             record_count += 1;
             for v in &var_names {

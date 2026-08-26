@@ -78,8 +78,8 @@ impl MetaCognitiveEngine {
             self.free_energy_history.push(f);
         }
         // Update prior means toward beliefs (learning)
-        for i in 0..n {
-            self.model.prior_mean[i] = 0.9 * self.model.prior_mean[i] + 0.1 * beliefs[i];
+        for (mean, belief) in self.model.prior_mean.iter_mut().zip(beliefs.iter()) {
+            *mean = 0.9 * *mean + 0.1 * belief;
         }
         beliefs
     }

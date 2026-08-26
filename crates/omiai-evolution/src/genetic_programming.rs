@@ -85,8 +85,8 @@ impl GeneticProgram {
     /// Evaluate the program on an input vector.
     pub fn eval(&self, inputs: &[f64]) -> Vec<f64> {
         let mut values = vec![0.0; self.n_inputs + self.nodes.len()];
-        for i in 0..self.n_inputs {
-            values[i] = inputs.get(i).copied().unwrap_or(0.0);
+        for (v, inp) in values.iter_mut().zip(inputs.iter()) {
+            *v = *inp;
         }
         for (i, node) in self.nodes.iter().enumerate() {
             let idx = self.n_inputs + i;
@@ -141,6 +141,10 @@ impl GeneticProgram {
     ///
     /// Evolves `islands` sub-populations of size `population_size / islands`
     /// for `generations`, migrating elites every 5 generations.
+    // 8 parameters is intrinsic to the search-space spec here (pop, islands,
+    // generations, grid shape x3, fitness, seed); grouping them would just
+    // move the count into a struct's constructor.
+    #[allow(clippy::too_many_arguments)]
     pub fn evolve<F>(
         population_size: usize,
         islands: usize,
@@ -177,7 +181,7 @@ impl GeneticProgram {
                     let mut r = ChaCha8Rng::seed_from_u64(
                         seed.wrapping_add((generation as u64 + 1) * 10007 + isle as u64),
                     );
-                    let fitnesses: Vec<Fitness> = pop.iter().map(|ind| fitness_fn(ind)).collect();
+                    let fitnesses: Vec<Fitness> = pop.iter().map(&fitness_fn).collect();
                     let strategy = SelectionStrategy::Tournament { k: 3 };
                     let best_i = fitnesses
                         .iter()
@@ -212,6 +216,7 @@ impl GeneticProgram {
                             .unwrap_or_else(|| pop[0].clone())
                     })
                     .collect();
+                #[allow(clippy::needless_range_loop)] // index arithmetic across islands
                 for i in 0..islands {
                     let src = (i + islands - 1) % islands;
                     // Replace worst with neighbor elite

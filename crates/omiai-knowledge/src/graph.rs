@@ -116,11 +116,10 @@ impl KnowledgeGraph {
 
         while let Some(cur) = queue.pop_front() {
             for edge in self.graph.edges_directed(cur, Direction::Outgoing) {
-                if let Some(k) = kind {
-                    if edge.weight().kind != k {
+                if let Some(k) = kind
+                    && edge.weight().kind != k {
                         continue;
                     }
-                }
                 let next = edge.target();
                 if visited.insert(next) {
                     parent.insert(next, cur);
