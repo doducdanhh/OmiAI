@@ -3,6 +3,17 @@
 //! Checkpoints are written to a sibling temporary file, flushed to stable
 //! storage, and then promoted. The previous valid state is retained as a
 //! backup so an interrupted replacement can be recovered.
+//!
+//! # Deprecated
+//!
+//! Superseded by directory-based `checkpoint-v1`
+//! ([`crate::traits::Checkpointable`] + [`crate::manifest::Manifest`] +
+//! [`crate::fsutil::write_atomic`]). The entire module is deprecated as a
+//! unit; new code must not use it.
+
+// Deprecated as a whole module — internal cross-references between these
+// items are intentional and must not warn.
+#![allow(deprecated)]
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
@@ -13,10 +24,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Current checkpoint envelope format.
+#[deprecated(since = "0.1.0", note = "single-file legacy format; use checkpoint-v1 (Checkpointable + Manifest) instead")]
 pub const STATE_FORMAT_VERSION: u32 = 1;
 
 /// Errors produced by durable state operations.
 #[derive(Debug, Error)]
+#[deprecated(since = "0.1.0", note = "single-file legacy format; use checkpoint-v1 (Checkpointable + Manifest) instead")]
 pub enum PersistenceError {
     #[error("state I/O failed: {0}")]
     Io(#[from] std::io::Error),
@@ -32,6 +45,7 @@ pub enum PersistenceError {
 
 /// Versioned state wrapper with an integrity checksum over its payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[deprecated(since = "0.1.0", note = "single-file legacy format; use checkpoint-v1 (Checkpointable + Manifest) instead")]
 pub struct StateEnvelope<T> {
     pub format_version: u32,
     pub checksum: u64,
@@ -65,6 +79,7 @@ impl<T: Serialize> StateEnvelope<T> {
 }
 
 /// Atomically checkpoint serializable state while retaining one backup.
+#[deprecated(since = "0.1.0", note = "single-file legacy format; use checkpoint-v1 (Checkpointable + Manifest) instead")]
 pub fn save_checkpoint<T: Serialize>(
     path: impl AsRef<Path>,
     state: &T,
@@ -108,6 +123,7 @@ pub fn save_checkpoint<T: Serialize>(
 }
 
 /// Load and verify a checkpoint, falling back to its backup if needed.
+#[deprecated(since = "0.1.0", note = "single-file legacy format; use checkpoint-v1 (Checkpointable + Manifest) instead")]
 pub fn load_checkpoint<T: DeserializeOwned + Serialize>(
     path: impl AsRef<Path>,
 ) -> Result<T, PersistenceError> {
