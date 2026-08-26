@@ -32,9 +32,11 @@ làm cả hai nhưng theo thứ tự tách → sửa từng crate theo thứ t�
 Root `Cargo.toml` là **virtual manifest** (quyết định A): chỉ `[workspace]`,
 `members = ["crates/*"]`, `resolver = "2"`. Không crate nào ở root.
 
-14 crate trong `crates/` (11 theo đề xuất ban đầu + `omiai-io`,
+15 crate trong `crates/` (11 theo đề xuất ban đầu + `omiai-io`,
 `omiai-memory` theo quyết định user + `omiai-causal` tách riêng khỏi
-probabilistic):
+probabilistic + `omiai-meta` tách riêng khi phân bổ code thật — meta
+đang là module lớn phụ thuộc core/evolution/knowledge/memory, không
+thuộc về io):
 
 | Crate | Module chuyển vào | Ghi chú |
 |---|---|---|
@@ -46,12 +48,20 @@ probabilistic):
 | `omiai-evolution` | `genetic_programming`, `genetic`, `crossover`, `mutation`, `selection`, `fitness` | |
 | `omiai-io` | `nlp_parser`, `tokenizer`, `perception`, `action`, `chat` | quyết định user |
 | `omiai-memory` | `episodic`, `semantic`, `working`, `procedural` | quyết định user |
+| `omiai-meta` | `self_improvement`, `autopoiesis`, `introspection`, `continual_learning` | tách riêng khi phân bổ code thật; phụ thuộc core/evolution/knowledge/memory/checkpoint/neuro — **không** phụ thuộc io (xem ghi chú chu trình bên dưới) |
 | `omiai-world` | `substrate` (từ `neuro/cellular`), `atoms`, `agents/`, `communication`, `world_loop` | logic mới — **không thuộc lát cắt 1** ngoài substrate rỗng + ca_grid checkpoint |
 | `omiai-checkpoint` | trait `Checkpointable`, helpers ghi/fsync/hash/rename, manifest, index, cửa sổ trượt; `legacy.rs` = `src/persistence.rs` cũ đánh dấu `#[deprecated]` | |
 | `omiai-export` | bundle `model.omiai` (tar+zstd) | crate rỗng khung, lát sau |
 | `omiai-runtime` | `load(bundle)` + `step(in) -> out`; KHÔNG depend evolution/training | crate rỗng khung, lát sau |
 | `omiai-serve` | axum HTTP `/infer` | crate rỗng khung, lát sau |
 | `omiai-cli` | bins: train/resume/export/bench/demo; hấp thụ `src/main.rs` cũ | |
+
+**Phát hiện khi phân bổ (cập nhật so với dự đoán ban đầu):** chu trình
+io↔meta lo ngại ở trên **không tồn tại trong code thật** —
+`DetectedLanguage`/`NlpParser` thuộc về io, meta không dùng chúng, và
+meta không phụ thuộc io. Cạnh io→meta duy nhất nằm trong một integration
+test của io (`MetaCognitiveEngine`), tách được bằng dev-dependency. Chi
+tiết: ADR-0005.
 
 Phân bổ tài nguyên hiện có:
 

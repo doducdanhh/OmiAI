@@ -1,91 +1,103 @@
 # OmiAI
 
 A zero-training, self-bootstrapping reasoning system in Rust. No deep
-learning, no GPU, no PyTorch/TensorFlow/JAX, no training datasets — instead,
-eight pillars of classical/theoretical CS and cognitive science: symbolic
-logic & formal reasoning, knowledge graphs & ontologies, evolutionary
-computation, reservoir computing, cellular automata, Bayesian/causal
-inference, active inference (free energy principle), and neuro-symbolic
-search.
+learning, no GPU, no PyTorch/TensorFlow/JAX, no training datasets —
+instead, eight pillars of classical/theoretical CS and cognitive science:
+symbolic logic & formal reasoning, knowledge graphs & ontologies,
+evolutionary computation, reservoir computing, cellular automata,
+Bayesian/causal inference, active inference (free energy principle), and
+neuro-symbolic search.
 
-This is **Part 1** of a large, incrementally-built system. Trying to
-generate the entire spec (dozens of algorithms, each research-grade) as one
-"production-ready, zero-bugs" drop is not realistic in a single pass — so
-this scaffold takes the approach the original spec itself allows for:
-split into parts, ship real working code for the first slice, and stub the
-rest with the exact types/signatures the design calls for.
+Built incrementally in reviewable slices: real working code and real
+tests for what's done, honest scaffolding (exact types/signatures,
+documented intent) for the rest. This repo is a **Cargo workspace of 15
+crates** (see `docs/adr/0001-workspace-layout.md`).
 
-## What's actually implemented (and tested)
+Target hardware: CPU-only, 8 GB RAM (i7-7700K class). That constraint is
+a design input, not an apology: reservoir computing instead of
+backpropagation, criterion benchmarks before any performance claim.
 
-`src/core/`
-- **`logic_engine.rs`** — `Formula` / `Term` AST for propositional and
-  first-order logic, `free_variables`, and a full CNF normalization
-  pipeline: eliminate `->`/`<->` → negation-normal form → Skolemization →
-  drop universal quantifiers → distribute OR over AND → clause list. Plus
-  a ground-formula `evaluate`.
-- **`substitution.rs`** — `Substitution` over terms/formulas, with
-  composition.
-- **`unification.rs`** — Robinson's first-order unification algorithm
-  with an occurs check.
+## Status: what's actually implemented (and tested)
 
-Run the tests for these three modules with `cargo test`. Run
-`cargo run -- logic-demo` or `cargo run --example logic_demo` to see the
-pipeline work end to end (the example Skolemizes `∀x(Human(x)→Mortal(x))
-∧ ∃y Human(y)` and prints the resulting clauses, including the generated
-Skolem constant).
+`cargo test --workspace` currently runs **226 tests across 36 test
+targets, all passing**, plus proptests and doc tests. Highlights:
 
-## What's scaffolded (types + doc comments, `todo!()` bodies)
+- **`omiai-core`** — full first-order logic stack: Formula/Term AST, CNF
+  normalization (NNF → Skolemization → distribution, with constant
+  folding), Robinson unification, resolution proofs, DPLL/CDCL, CSP
+  solver, LTL. Proptests check CNF preserves ground truth.
+- **`omiai-probabilistic`** — Bayesian networks with variable
+  elimination; junction-tree inference (Hugin propagation, evidence
+  entered before calibration) matching hand-computed exact posteriors
+  (P(Rain|Wet)=0.7396 on the textbook network); Gibbs sampling, HMC,
+  mean-field VI (with its documented collider limitation), MCTS and
+  PUCT-MCTS.
+- **`omiai-causal`** — DAGs, back-door criterion, linear SCMs, Pearl
+  counterfactuals done properly (abduction recovers noise; intervention
+  carries it forward).
+- **`omiai-knowledge`** — knowledge graphs, ontology classification with
+  disjointness checking, forward/backward chaining, abduction,
+  SPARQL-like triple queries, transitive closure.
+- **`omiai-neuro`** — seeded sparse reservoirs with RLS readout training
+  and spectral-radius normalization (power iteration).
+- **`omiai-evolution`** — CGP genetic programming exercised by symbolic
+  regression integration tests.
+- **`omiai-memory`** — episodic/semantic/working memory stores.
+- **`omiai-io`** — rule-based bilingual (EN/VI) NLP front-end turning
+  text into logic formulas ("every human is mortal" → ∀x(Human(x)→Mortal(x))).
+- **`omiai-world`** — reversible Margolus block cellular automaton with
+  HashLife-style caching and rayon sweeps; population conservation is
+  proptest-checked.
+- **`omiai-checkpoint`** — checkpoint-v1 directory format:
+  `Checkpointable` trait, BLAKE3 hashing, atomic writes
+  (tmp→fsync→rename→dir-fsync), manifest verification with tamper
+  detection, and byte-exact CA-grid round-trip + conservation proptests.
+  Format spec: [`docs/format-spec/checkpoint-v1.md`](docs/format-spec/checkpoint-v1.md).
 
-Every other module described in the original spec exists as a real Rust
-module with the structs/enums the design calls for, so the crate compiles
-and the architecture is navigable — but the algorithms themselves
-(`inference.rs`'s DPLL/CDCL, `asp_solver.rs`'s stable-model computation,
-`knowledge::graph`'s tableau consistency check, `neuro::reservoir`'s
-FORCE/RLS learning, `evolution::genetic_programming`'s CGP + island model,
-`causal::do_calculus`'s Pearl do-calculus, `meta::self_improvement`'s
-Active Inference loop, etc.) are not yet written. Each stub file's doc
-comment states what it's meant to hold.
+Integration tests wire pillars together end-to-end (NLP → logic → proof;
+causal DAG → SCM → counterfactual; three inference methods agreeing on
+the same posterior).
 
-## Suggested build order (Part 2, 3, ...)
+## What's scaffolded (types + doc comments, not yet implemented)
 
-1. `core::unification` → `core::inference` (Resolution, DPLL, then CDCL) →
-   `core::prover` (SAT/SMT on top of CDCL).
-2. `core::csp_solver` (AC-3 + backtracking) — self-contained, good next
-   milestone.
-3. `knowledge::graph` + `knowledge::reasoning` (forward/backward/abductive
-   chaining) — depends on `core::logic_engine`.
-4. `probabilistic::bayesian` and `causal::*` — depends on a small linear
-   algebra layer (`nalgebra`).
-5. `neuro::reservoir` and `evolution::*` — independent of the symbolic
-   core; can be built in parallel.
-6. `meta::*` — depends on nearly everything else, since self-improvement
-   needs a working prover + evolutionary search to rewrite/verify code
-   against.
+- `omiai-world`: agents, communication, resources, world loop — only the
+  CA substrate is real so far.
+- `omiai-core`: parts of ASP solving and higher-order unification.
+- `omiai-knowledge::discocat`, `omiai-probabilistic::{kolmogorov,
+  solomonoff}`, `omiai-causal::icp` (narrow), `omiai-memory::procedural`.
+- `omiai-export` (model.omiai tar+zstd bundles), `omiai-runtime`
+  (`load(bundle)` + step loop), `omiai-serve` (axum `/infer`),
+  `omiai-cli` — thin shells awaiting the slices that need them.
+- Checkpoint retention window (keep-N + milestones) and remaining
+  checkpoint payloads (logic clauses, graphs, populations, DAGs).
+
+Each scaffold module's doc comment states what it is meant to hold.
+
+## Suggested build order
+
+1. ~~core unification → inference → prover~~ ✅ done and tested
+2. ~~knowledge graph + chaining~~ ✅ · probabilistic/causal core ✅ ·
+   neuro reservoirs ✅ · evolution CGP ✅ · memory ✅
+3. `omiai-world`: agents + world loop over the existing substrate
+4. Checkpoint payloads for every pillar + retention policy
+5. `omiai-runtime`: deterministic resume from checkpoints
+6. `omiai-export` / `omiai-serve` / `omiai-cli`
+7. Meta-cognition last, once it has a prover and search worth improving
 
 ## Building
 
 ```sh
-cargo build --release
-cargo test
-cargo run --example logic_demo
+cargo build --workspace
+cargo test --workspace          # 226+ tests
+cargo clippy --workspace --all-targets
+cargo bench -p omiai-world       # or omiai-core / others
 ```
-
-**Note:** this scaffold was generated in a sandboxed environment with no
-network access, so `cargo build`/`cargo test` could not be run here to
-confirm everything compiles end-to-end against the crates.io registry.
-The `core::logic_engine`, `substitution`, and `unification` modules use
-only `std` and were written/reviewed carefully for this reason. Dependency
-versions in `Cargo.toml` were spot-checked against crates.io (`rand`,
-`petgraph`, `miette`) as of July 2026, but run `cargo update` after your
-first build to make sure everything resolves against the versions on your
-machine.
 
 ## Why not just generate all 8 pillars at once?
 
 A few of the spec's own requirements (property-based tests proving
-conservation laws, Miri-checked unsafe abstractions, fuzzing, formal
-verification annotations, specific throughput targets like 10M-node graph
-queries in 10ms) are things that need to be *measured*, not asserted. Code
-that claims to hit them without benchmarks to back it up would just be
-guessing. Building this in reviewable slices means each pillar gets real
-tests before the next one leans on it.
+conservation laws, throughput targets, exactness guarantees) are things
+that must be *measured*, not asserted. Code that claims to hit them
+without benchmarks to back it up would just be guessing. Each slice gets
+real tests before the next one leans on it — and this README claims
+nothing beyond what the current test suite actually checks.
