@@ -10,12 +10,18 @@
 //! 14      1     num_states u8
 //! 15      1     flags      u8   (=0)
 //! 16      4     reserved   u32  (=0)
-//! 20..          body: bit-packed row-major LSB-first cells
+//! 20..          body: row-major cells, ONE BYTE per cell (raw state value,
+//!               0..num_states — supports resource states 2/3 của World)
 //! ```
 //!
 //! Note: the slice-1 plan called this a "16-byte header", but the listed
 //! fields sum to 20; the field list wins (the u32 reserved word is kept
 //! for forward compatibility).
+//!
+//! Slice-1 shipped a bit-packed body ("bit set = live"); slice-2 requires
+//! bit-exact resume of multi-state worlds (resource cells 2/3), so the
+//! body is now one byte per cell. The magic is unchanged — v1 readers of
+//! the old format must reject via the body-length check.
 //!
 //! Only the grid is persistent state: `phase` and `block_cache` are
 //! private simulation bookkeeping in `omiai_world` and reset on load.
@@ -38,7 +44,7 @@ impl Checkpointable for CellularAutomaton {
     type Error = CheckpointError;
 
     fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
-        let bytes = encode(self)?;
+        let bytes = encode_ca(self)?;
         write_atomic(dir, GRID_FILE, &bytes)?;
         let hash = hash_file(&dir.join(GRID_FILE))?;
         Manifest::write(
@@ -79,12 +85,12 @@ impl Checkpointable for CellularAutomaton {
                 actual,
             });
         }
-        decode(&bytes)
+        decode_ca(&bytes)
     }
 }
 
 /// Serialize a CA into the `ca_grid.bin` byte layout.
-fn encode(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
+pub(crate) fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
     let w = ca.width;
     let h = ca.height;
     if w > u16::MAX as usize || h > u16::MAX as usize {
@@ -93,7 +99,7 @@ fn encode(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
         });
     }
     let body_len = w * h;
-    let mut out = Vec::with_capacity(HEADER_LEN + body_len.div_ceil(8));
+    let mut out = Vec::with_capacity(HEADER_LEN + body_len);
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&(w as u16).to_le_bytes());
     out.extend_from_slice(&(h as u16).to_le_bytes());
@@ -101,28 +107,16 @@ fn encode(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
     out.push(0u8); // flags
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved
 
-    // Bit-packed row-major LSB-first.
-    let mut acc = 0u8;
-    let mut bit = 0u32;
+    // Row-major, một byte mỗi cell (giữ nguyên giá trị 0..num_states).
     for &c in &ca.cells {
-        if c != 0 {
-            acc |= 1 << bit;
-        }
-        bit += 1;
-        if bit == 8 {
-            out.push(acc);
-            acc = 0;
-            bit = 0;
-        }
-    }
-    if bit > 0 {
-        out.push(acc);
+        debug_assert!(c < ca.num_states || c == 0);
+        out.push(c);
     }
     Ok(out)
 }
 
 /// Reconstruct a CA from `ca_grid.bin` bytes.
-fn decode(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointError> {
+pub(crate) fn decode_ca(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointError> {
     let path = Path::new(GRID_FILE).to_path_buf();
     if bytes.len() < HEADER_LEN || &bytes[..10] != MAGIC {
         return Err(CheckpointError::BadMagic { path });
@@ -131,8 +125,8 @@ fn decode(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointError> {
     let h = u16::from_le_bytes([bytes[12], bytes[13]]) as usize;
     let num_states = bytes[14];
     let body = &bytes[HEADER_LEN..];
-    let expected_len = (w * h).div_ceil(8);
-    if body.len() < expected_len {
+    let expected_len = w * h;
+    if body.len() != expected_len {
         return Err(CheckpointError::Corrupt {
             path,
             expected: format!("body len {expected_len}"),
@@ -142,16 +136,15 @@ fn decode(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointError> {
     // `phase` and `block_cache` are private simulation bookkeeping;
     // reconstruct via the public constructor, then restore the decoded
     // cells directly (the public `set` clamps values into
-    // `0..num_states`, which would corrupt multi-state grids whose
-    // stored bits mean "live").
-    let mut ca = CellularAutomaton::new(w, h, num_states);
-    let n = w * h;
-    let mut cells = vec![0u8; n];
-    for (i, cell) in cells.iter_mut().enumerate() {
-        if body[i / 8] >> (i % 8) & 1 == 1 {
-            *cell = 1;
-        }
+    // `0..num_states`, which would corrupt resource states 2/3).
+    if body.iter().any(|&c| c >= num_states && num_states > 0) {
+        return Err(CheckpointError::Corrupt {
+            path,
+            expected: format!("cells in 0..{num_states}"),
+            actual: "cell value out of range".to_string(),
+        });
     }
-    ca.cells = cells;
+    let mut ca = CellularAutomaton::new(w, h, num_states);
+    ca.cells = body.to_vec();
     Ok(ca)
 }

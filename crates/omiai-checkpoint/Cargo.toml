@@ -14,6 +14,7 @@ ciborium.workspace = true
 blake3.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+rand_chacha.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

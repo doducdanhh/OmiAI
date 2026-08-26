@@ -351,13 +351,13 @@ mod tests {
         // Atom ở (1,0), genome mặc định (res ∨ open); đặt tài nguyên bên E.
         let gene = FormulaId::from_slot(0);
         w.atoms.push(Atom { pos: (1, 0), energy: 0.5, gene, age: 0 });
-        w.ca.cells[0 * 4 + 2] = 3; // (2,0) = East
+        w.ca.cells[2] = 3; // (x=2, y=0) — East neighbor
         let before = w.atoms[0].energy;
 
         w.agent_act();
 
         assert_eq!(w.atoms[0].pos, (2, 0));
-        assert_eq!(w.ca.cells[0 * 4 + 2], 0); // đã ăn
+        assert_eq!(w.ca.cells[2], 0); // đã ăn
         assert!(w.atoms[0].energy > before);
         assert!(w.atoms[0].energy <= ENERGY_MAX);
     }

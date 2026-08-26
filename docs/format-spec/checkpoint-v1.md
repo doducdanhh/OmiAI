@@ -86,15 +86,20 @@ offset  size  field
 14      1     num_states u8
 15      1     flags      u8   (= 0)
 16      4     reserved   u32 LE (= 0)
-20..          body: bit-packed cells, row-major, LSB-first
+20..          body: row-major cells, ONE BYTE per cell
 ```
 
 - Header is 20 bytes total. (Slice-1's plan said "16-byte header", but
   the listed fields sum to 20; the field list wins.)
-- Body length is `ceil(width*height / 8)` bytes. Cell value 0 = empty;
-  bit set = live (state 1). Multi-state grids are not yet encoded — the
-  bit encodes "nonzero".
+- Body length is exactly `width*height` bytes; each byte holds the raw
+  cell state (`0..num_states`). Slice-1 shipped a bit-packed body
+  ("bit set = live"), which cannot represent the resource states 2/3 of
+  the slice-2 world — bit-exact resume requires the full value, so the
+  body was upgraded to one byte per cell while the magic stayed
+  unchanged. Readers of the old format fail on the body-length check.
 - Dimensions above `u16::MAX` → `CheckpointError::GridTooLarge`.
+- Load checks magic (`BadMagic`), then body length and per-cell range,
+  after verifying the BLAKE3 hash from the manifest.
 - Load checks magic (`BadMagic`), then body length, after verifying the
   BLAKE3 hash from the manifest.
 - **Phase is not persistent state**: the Margolus partition phase and

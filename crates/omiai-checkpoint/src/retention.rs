@@ -31,7 +31,7 @@ pub fn apply_retention(
 ) -> Result<Vec<(u64, PathBuf)>, CheckpointError> {
     let mut steps = list_steps(root)?;
     // Gần nhất trước.
-    steps.sort_by(|a, b| b.0.cmp(&a.0));
+    steps.sort_by_key(|&(s, _)| std::cmp::Reverse(s));
 
     let mut removed = Vec::new();
     for (i, (step, path)) in steps.iter().enumerate() {

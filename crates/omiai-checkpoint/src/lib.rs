@@ -19,6 +19,7 @@ pub mod legacy;
 pub mod manifest;
 pub mod retention;
 pub mod traits;
+mod world_bundle;
 
 pub use error::CheckpointError;
 pub use retention::{apply_retention, RetentionPolicy};
