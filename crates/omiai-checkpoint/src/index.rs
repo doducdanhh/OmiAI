@@ -88,8 +88,12 @@ pub fn read_or_rebuild_index(
     if let Some(mut idx) = from_file {
         idx.entries.sort_by_key(|e| e.step);
         let indexed: HashSet<u64> = idx.entries.iter().map(|e| e.step).collect();
-        let all_on_disk = on_disk.iter().all(|(s, _)| indexed.contains(s));
-        if all_on_disk {
+        let on_disk_steps: HashSet<u64> = on_disk.iter().map(|(s, _)| *s).collect();
+        // Stale theo CẢ HAI chiều: thiếu step có trên đĩa (checkpoint mới ghi
+        // mà chưa cập nhật index) HOẶC còn step đã bị xoá khỏi đĩa
+        // (`apply_retention` vừa dọn) — entry trỏ vào thư mục không tồn tại
+        // sẽ làm caller resume vào lỗi Io.
+        if indexed == on_disk_steps {
             return Ok((idx, false));
         }
     }
@@ -136,6 +140,9 @@ mod tests {
     #[test]
     fn write_then_read_round_trips() {
         let root = temp_root("rt");
+        for s in [3u64, 5] {
+            std::fs::create_dir_all(root.join(format!("step_{s:08}"))).unwrap();
+        }
         let idx = CheckpointIndex {
             entries: vec![
                 CheckpointIndexEntry { step: 5, dir: "step_00000005".into() },
@@ -196,6 +203,32 @@ mod tests {
         let (idx, rebuilt) = read_or_rebuild_index(&root).unwrap();
         assert!(rebuilt);
         assert_eq!(idx.entries.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stale_index_with_deleted_step_rebuilds() {
+        let root = temp_root("stale-del");
+        for s in [1u64, 2] {
+            std::fs::create_dir_all(root.join(format!("step_{s:08}"))).unwrap();
+        }
+        write_index(
+            &root,
+            &CheckpointIndex {
+                entries: vec![
+                    CheckpointIndexEntry { step: 1, dir: "step_00000001".into() },
+                    CheckpointIndexEntry { step: 2, dir: "step_00000002".into() },
+                ],
+            },
+        )
+        .unwrap();
+        // Mô phỏng apply_retention dọn step 1 → index còn entry mồ côi.
+        std::fs::remove_dir_all(root.join("step_00000001")).unwrap();
+
+        let (idx, rebuilt) = read_or_rebuild_index(&root).unwrap();
+        assert!(rebuilt, "entry trỏ vào thư mục đã xoá phải kích hoạt rebuild");
+        assert_eq!(idx.entries.len(), 1);
+        assert_eq!(idx.entries[0].step, 2);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

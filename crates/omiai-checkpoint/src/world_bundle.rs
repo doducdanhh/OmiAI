@@ -178,6 +178,28 @@ impl Checkpointable for World {
         let word_pos =
             u128::from_le_bytes(rng_bytes[16..32].try_into().expect("16 bytes"));
 
+        // Nhất quán liên-payload: atom phải nằm trong lưới và gene phải trỏ
+        // vào slot có thật. Nếu không kiểm ở đây, world resume "thành công"
+        // rồi atom im lặng bất động (`registry.get` → None → `continue` trong
+        // agent_act) — đúng kiểu hỏng âm thầm mà §4 spec cấm.
+        let n_genomes = registry_file.genomes.len();
+        for atom in &atoms_file.atoms {
+            if atom.pos.0 >= ca.width || atom.pos.1 >= ca.height {
+                return Err(CheckpointError::Corrupt {
+                    path: world_dir.join(ATOMS_FILE),
+                    expected: format!("pos < ({}, {})", ca.width, ca.height),
+                    actual: format!("atom at {:?}", atom.pos),
+                });
+            }
+            if (atom.gene.slot() as usize) >= n_genomes {
+                return Err(CheckpointError::Corrupt {
+                    path: world_dir.join(ATOMS_FILE),
+                    expected: format!("gene slot < {n_genomes}"),
+                    actual: format!("slot {}", atom.gene.slot()),
+                });
+            }
+        }
+
         Ok(World {
             ca,
             registry: FormulaRegistry::from_genomes_in_order(registry_file.genomes),

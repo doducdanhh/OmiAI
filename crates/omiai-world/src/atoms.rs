@@ -42,6 +42,15 @@ impl Atom {
             (self.energy + (cell_value as f64) * ENERGY_PER_RESOURCE_UNIT).min(ENERGY_MAX);
     }
 
+    /// Đã đủ năng lượng để sinh sản chưa (không thay đổi trạng thái).
+    ///
+    /// Caller phải kiểm cái này TRƯỚC khi tìm ô đặt con, rồi mới gọi
+    /// [`Atom::split_energy`] — nếu split trước mà sau đó không có ô trống,
+    /// năng lượng cha bốc hơi mà chẳng sinh được ai.
+    pub fn can_split(&self) -> bool {
+        self.energy >= REPRODUCE_THRESHOLD
+    }
+
     /// Sinh sản: cha giữ nửa năng lượng, trả về nửa cho con.
     /// Trả về `None` nếu chưa đạt ngưỡng sinh sản.
     pub fn split_energy(&mut self) -> Option<f64> {
@@ -119,6 +128,19 @@ mod tests {
         let child = b.split_energy().unwrap();
         assert!((child - REPRODUCE_THRESHOLD / 2.0).abs() < 1e-12);
         assert!((b.energy - REPRODUCE_THRESHOLD / 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn can_split_agrees_with_split_energy() {
+        // can_split là cửa kiểm không-thay-đổi-trạng-thái cho split_energy:
+        // hai hàm phải luôn đồng ý, và can_split không được trừ năng lượng.
+        for energy in [0.0, REPRODUCE_THRESHOLD - 0.01, REPRODUCE_THRESHOLD, ENERGY_MAX]
+        {
+            let mut a = atom_at(0, 0, energy);
+            let expected = a.can_split();
+            assert_eq!(a.energy, energy, "can_split không được đổi năng lượng");
+            assert_eq!(a.split_energy().is_some(), expected);
+        }
     }
 
     #[test]

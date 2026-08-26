@@ -41,6 +41,7 @@ impl Default for WorldConfig {
 }
 
 /// Thế giới: lưới CA + registry genome + các atom + RNG deterministic.
+#[derive(Debug)]
 pub struct World {
     pub ca: CellularAutomaton,
     pub registry: FormulaRegistry,
@@ -176,42 +177,45 @@ impl World {
         let mut taken = occupied_set(&self.atoms);
         for atom in self.atoms.iter_mut() {
             atom.age += 1;
-            if let Some(child_energy) = atom.split_energy() {
-                let in_bounds =
-                    |x: usize, y: usize| x < self.ca.width && y < self.ca.height;
-                let is_taken = |x: usize, y: usize| taken.contains(&(x, y));
-                if let Some((sx, sy)) = crate::atoms::first_free_neighbor(
-                    atom.pos,
-                    &in_bounds,
-                    &is_taken,
-                ) {
-                    // Chỉ sinh lên ô giá trị 0 (YAGNI: không sinh-ăn-always).
-                    let cell_v = self.ca.cells[sy * self.ca.width + sx];
-                    if cell_v == 0 {
-                        let child_gene = if self.rng.r#gen::<f64>() < MUTATION_PROB
-                        {
-                            let mutated = match self.registry.get(atom.gene) {
-                                Some(g) => mutate_formula(
-                                    &g.formula,
-                                    &mut self.rng,
-                                ),
-                                None => continue,
-                            };
-                            self.registry
-                                .insert(Genome { formula: mutated, fitness: None })
-                        } else {
-                            atom.gene
-                        };
-                        taken.insert((sx, sy));
-                        children.push(Atom {
-                            pos: (sx, sy),
-                            energy: child_energy,
-                            gene: child_gene,
-                            age: 0,
-                        });
-                    }
-                }
+            if !atom.can_split() {
+                continue;
             }
+            let in_bounds =
+                |x: usize, y: usize| x < self.ca.width && y < self.ca.height;
+            let is_taken = |x: usize, y: usize| taken.contains(&(x, y));
+            let Some((sx, sy)) = crate::atoms::first_free_neighbor(
+                atom.pos,
+                &in_bounds,
+                &is_taken,
+            ) else {
+                continue;
+            };
+            // Chỉ sinh lên ô giá trị 0 (YAGNI: không sinh-ăn-always).
+            if self.ca.cells[sy * self.ca.width + sx] != 0 {
+                continue;
+            }
+            let child_gene = if self.rng.r#gen::<f64>() < MUTATION_PROB {
+                let mutated = match self.registry.get(atom.gene) {
+                    Some(g) => mutate_formula(&g.formula, &mut self.rng),
+                    None => continue, // genome mất (không xảy ra ở slice này)
+                };
+                self.registry
+                    .insert(Genome { formula: mutated, fitness: None })
+            } else {
+                atom.gene
+            };
+            // Trừ năng lượng cha LÀ BƯỚC CUỐI: ô đặt con đã chắc chắn, nên
+            // không có đường nào làm năng lượng biến mất mà chẳng sinh ai.
+            let Some(child_energy) = atom.split_energy() else {
+                continue; // can_split() ở trên đã đảm bảo Some
+            };
+            taken.insert((sx, sy));
+            children.push(Atom {
+                pos: (sx, sy),
+                energy: child_energy,
+                gene: child_gene,
+                age: 0,
+            });
         }
         self.atoms.extend(children);
     }
@@ -431,6 +435,8 @@ mod tests {
             .push(Atom { pos: (1, 1), energy: REPRODUCE_THRESHOLD, gene, age: 0 });
         w.reproduce_and_evolve();
         assert_eq!(w.atoms.len(), 4); // không ai sinh được
+        // Sinh sản thất bại KHÔNG được ăn mất năng lượng của cha.
+        assert_eq!(w.atoms[3].energy, REPRODUCE_THRESHOLD);
     }
 
     #[test]

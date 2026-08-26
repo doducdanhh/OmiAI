@@ -82,3 +82,46 @@ fn tampered_payload_detected() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn dangling_gene_reference_is_corrupt_not_silent() {
+    // Atom trỏ vào slot không có trong registry: nếu load bỏ qua, atom sẽ
+    // im lặng bất động mãi mãi (agent_act `continue` khi registry.get None).
+    // §4 spec: resume phải dừng ồn ào, không được skip.
+    let root = std::env::temp_dir()
+        .join(format!("omiai-wrt-dangling-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let cp = root.join("step_00000000");
+    std::fs::create_dir_all(&cp).unwrap();
+
+    let mut w = World::new(config(), 5);
+    w.atoms[0].gene = omiai_world::registry::FormulaId::from_slot(99);
+    w.save(&cp).expect("save world");
+    verify_dir(&cp).expect("hash vẫn khớp — lỗi là ở mức tham chiếu");
+
+    let err = World::load(&cp).expect_err("gene mồ côi phải bị từ chối");
+    assert!(
+        format!("{err}").contains("slot"),
+        "lỗi phải nói rõ gene slot, nhận: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn out_of_bounds_atom_is_corrupt() {
+    let root =
+        std::env::temp_dir().join(format!("omiai-wrt-oob-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let cp = root.join("step_00000000");
+    std::fs::create_dir_all(&cp).unwrap();
+
+    let mut w = World::new(config(), 5);
+    w.atoms[0].pos = (99, 0);
+    w.save(&cp).expect("save world");
+
+    let err = World::load(&cp).expect_err("atom ngoài lưới phải bị từ chối");
+    assert!(format!("{err}").contains("pos"), "nhận: {err}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}

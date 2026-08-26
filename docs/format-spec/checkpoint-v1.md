@@ -122,8 +122,6 @@ offset  size  field
 - Dimensions above `u16::MAX` → `CheckpointError::GridTooLarge`.
 - Load checks magic (`BadMagic`), then body length and per-cell range,
   after verifying the BLAKE3 hash from the manifest.
-- Load checks magic (`BadMagic`), then body length, after verifying the
-  BLAKE3 hash from the manifest.
 - **Phase is not persistent state**: the Margolus partition phase and
   the HashLife-style block cache are private bookkeeping in
   `omiai-world` and reset on load. A resumed run replays determinism
@@ -145,6 +143,10 @@ under `world/`, each hashed into `manifest.json` as `world/<name>`:
   `set_stream(stream)` → `set_word_pos(word_pos)`.
 - Load verifies manifest version + every BLAKE3 hash before trusting any
   payload; a wrong rng_state length is `Corrupt`.
+- Load also checks **cross-payload referential integrity**: every atom
+  position must be inside the loaded grid and every `gene` slot must
+  exist in `registry.cbor`. A dangling reference is `Corrupt`, not a
+  silently inert atom (§4: stop loudly, never skip).
 - Bit-exact resume is test-enforced (`tests/world_roundtrip.rs`).
 
 ## 6. Compatibility policy

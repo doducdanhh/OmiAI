@@ -19,7 +19,7 @@ backpropagation, criterion benchmarks before any performance claim.
 
 ## Status: what's actually implemented (and tested)
 
-`cargo test --workspace` currently runs **272 tests across 38 test
+`cargo test --workspace` currently runs **276 tests across 38 test
 targets, all passing**, plus proptests and doc tests. Highlights:
 
 - **`omiai-core`** — full first-order logic stack: Formula/Term AST, CNF
@@ -100,7 +100,7 @@ Each scaffold module's doc comment states what it is meant to hold.
 
 ```sh
 cargo build --workspace
-cargo test --workspace          # 272+ tests
+cargo test --workspace          # 276 tests, all passing
 cargo clippy --workspace --all-targets
 cargo bench -p omiai-world       # or omiai-core / others
 ```
