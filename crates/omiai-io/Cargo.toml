@@ -1,0 +1,24 @@
+[package]
+name = "omiai-io"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Dialogue front-end: NLP parser, tokenizer, perception, actions, chat engine, conversation memory."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+serde.workspace = true
+nom.workspace = true
+
+[dev-dependencies]
+omiai-world = { path = "../omiai-world" }
+
+omiai-evolution = { path = "../omiai-evolution" }
+omiai-meta = { path = "../omiai-meta" }
+omiai-neuro = { path = "../omiai-neuro" }
+omiai-probabilistic = { path = "../omiai-probabilistic" }
+
+omiai-causal = { path = "../omiai-causal" }
+omiai-knowledge = { path = "../omiai-knowledge" }
+proptest.workspace = true

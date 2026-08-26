@@ -1,0 +1,21 @@
+[package]
+name = "omiai-probabilistic"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Probabilistic reasoning: Bayesian networks, Gibbs, HMC, junction tree, MCTS/PUCT, mean field."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+rand.workspace = true
+rand_distr.workspace = true
+rand_chacha.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "bayesian"
+harness = false

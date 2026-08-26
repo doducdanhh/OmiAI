@@ -1,0 +1,15 @@
+[package]
+name = "omiai-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Command-line entry points: train / resume / export / bench / demo subcommands over the workspace crates."
+
+[[bin]]
+name = "omiai"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+anyhow.workspace = true

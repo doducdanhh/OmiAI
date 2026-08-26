@@ -1,0 +1,17 @@
+[package]
+name = "omiai-memory"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Memory systems: episodic, semantic, working, procedural."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+omiai-io = { path = "../omiai-io" }
+chrono.workspace = true
+serde.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
