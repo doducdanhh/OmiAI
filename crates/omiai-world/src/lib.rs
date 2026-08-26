@@ -11,6 +11,7 @@
 
 #![allow(dead_code)]
 
+pub mod agents;
 pub mod atoms;
 pub mod ecology;
 pub mod registry;
