@@ -225,6 +225,23 @@ impl NlpParser {
     }
 
     fn build_assertion(&self, words: &[String], language: DetectedLanguage) -> Option<Formula> {
+        // Universal rule: "every human is mortal" / "mọi người là phàm"
+        //   → ∀x (Human(x) → Mortal(x))
+        if words.len() == 4
+            && matches!(words[0].as_str(), "every" | "mọi")
+            && matches!(words[2].as_str(), "is" | "là")
+        {
+            let subject = self.normalized_concept(&words[1], language);
+            let predicate = self.normalized_concept(&words[3], language);
+            let var = || Term::Var("x".into());
+            return Some(Formula::ForAll(
+                "x".into(),
+                Box::new(Formula::Implies(
+                    Box::new(Formula::atom(subject, vec![var()])),
+                    Box::new(Formula::atom(predicate, vec![var()])),
+                )),
+            ));
+        }
         if words.len() == 3 && matches!(words[1].as_str(), "is" | "là") {
             let pred = self.normalized_concept(&words[2], language);
             return Some(Formula::atom(pred, vec![Term::Const(words[0].clone())]));

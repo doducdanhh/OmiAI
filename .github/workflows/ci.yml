@@ -1,0 +1,13 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      # Advisory at this slice: clippy findings are reported but do not
+      # fail CI until the codebase is warning-free across all targets.
+      - run: cargo clippy --workspace --all-targets -- -D warnings || true

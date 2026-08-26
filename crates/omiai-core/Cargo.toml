@@ -23,6 +23,7 @@ omiai-probabilistic = { path = "../omiai-probabilistic" }
 
 criterion.workspace = true
 proptest.workspace = true
+rand.workspace = true
 
 [[bench]]
 name = "cnf"
