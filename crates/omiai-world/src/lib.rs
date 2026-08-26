@@ -16,3 +16,4 @@ pub mod atoms;
 pub mod ecology;
 pub mod registry;
 pub mod substrate;
+pub mod world_loop;

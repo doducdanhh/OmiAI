@@ -12,6 +12,8 @@ omiai-evolution = { path = "../omiai-evolution" }
 rayon.workspace = true
 serde.workspace = true
 generational-arena.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
