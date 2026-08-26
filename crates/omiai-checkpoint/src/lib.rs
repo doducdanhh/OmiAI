@@ -17,9 +17,11 @@ pub mod fsutil;
 pub mod index;
 pub mod legacy;
 pub mod manifest;
+pub mod retention;
 pub mod traits;
 
 pub use error::CheckpointError;
+pub use retention::{apply_retention, RetentionPolicy};
 pub use fsutil::{hash_file, write_atomic};
 pub use manifest::{FileRecord, Manifest};
 pub use traits::Checkpointable;
