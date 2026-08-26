@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use omiai::probabilistic::hmc::{HmcSampler, LogDensity};
+//! use omiai_probabilistic::hmc::{HmcSampler, LogDensity};
 //!
 //! struct UnitGaussian;
 //! impl LogDensity for UnitGaussian {
@@ -113,7 +113,10 @@ impl HmcSampler {
             for i in 0..dim {
                 p_prop[i] += 0.5 * self.step_size * grad_prop[i];
             }
-            // Full alternating steps
+            // Full alternating steps; a non-finite density mid-trajectory
+            // is a divergence — reject the whole proposal instead of
+            // running the trailing half-step with a stale gradient.
+            let mut diverged = false;
             for _step in 0..self.num_leapfrog {
                 for i in 0..dim {
                     q_prop[i] += self.step_size * p_prop[i];
@@ -121,36 +124,39 @@ impl HmcSampler {
                 let log_p_prop = density.log_density(&q_prop, &mut grad_prop);
                 if !log_p_prop.is_finite() {
                     divergences += 1;
+                    diverged = true;
                     break;
                 }
                 for i in 0..dim {
                     p_prop[i] += self.step_size * grad_prop[i];
                 }
             }
-            // Final half-step
-            for i in 0..dim {
-                p_prop[i] += 0.5 * self.step_size * grad_prop[i];
-            }
-            // Negate momentum to preserve reversibility
-            for p_i in p_prop.iter_mut() {
-                *p_i = -*p_i;
-            }
+            if !diverged {
+                // Final half-step
+                for i in 0..dim {
+                    p_prop[i] += 0.5 * self.step_size * grad_prop[i];
+                }
+                // Negate momentum to preserve reversibility
+                for p_i in p_prop.iter_mut() {
+                    *p_i = -*p_i;
+                }
 
-            // 3. Metropolis acceptance
-            let log_p_prop = density.log_density(&q_prop, &mut grad_prop);
-            let kinetic_old: f64 = p.iter().map(|x| x * x).sum::<f64>() * 0.5;
-            let kinetic_new: f64 = p_prop.iter().map(|x| x * x).sum::<f64>() * 0.5;
-            let h_old = -(log_p_cur) + kinetic_old;
-            let h_new = -(log_p_prop) + kinetic_new;
-            let log_alpha = (h_old - h_new).min(0.0);
-            let u: f64 = rng.r#gen::<f64>();
-            if u.ln() < log_alpha {
-                q_cur = q_prop;
-                log_p_cur = log_p_prop;
-                grad_cur = grad_prop;
-                accepted += 1;
+                // 3. Metropolis acceptance
+                let log_p_prop = density.log_density(&q_prop, &mut grad_prop);
+                let kinetic_old: f64 = p.iter().map(|x| x * x).sum::<f64>() * 0.5;
+                let kinetic_new: f64 = p_prop.iter().map(|x| x * x).sum::<f64>() * 0.5;
+                let h_old = -(log_p_cur) + kinetic_old;
+                let h_new = -(log_p_prop) + kinetic_new;
+                let log_alpha = (h_old - h_new).min(0.0);
+                let u: f64 = rng.r#gen::<f64>();
+                if u.ln() < log_alpha {
+                    q_cur = q_prop;
+                    log_p_cur = log_p_prop;
+                    grad_cur = grad_prop;
+                    accepted += 1;
+                }
+                energies.push(h_old);
             }
-            energies.push(h_old);
 
             // Only record after burn-in
             if it >= self.burn_in {
@@ -358,7 +364,10 @@ mod tests {
             mean: vec![3.0],
             std: 1.5,
         };
-        let sampler = HmcSampler::new(0.4, 25, 800);
+        // Trajectory length eps*L must stay around the target's scale
+        // (~pi/2 * std = 2.4 here); eps=0.15, L=15 gives 2.25 with
+        // acceptance ~0.97 and correct tail behavior.
+        let sampler = HmcSampler::new(0.15, 15, 800);
         let result = sampler.sample(&density, 7);
         let m = result.mean();
         assert!((m[0] - 3.0).abs() < 0.3, "mean={} expected ~3.0", m[0]);
@@ -367,7 +376,9 @@ mod tests {
     #[test]
     fn std_dev_positive() {
         let density = StandardNormal_(3);
-        let sampler = HmcSampler::new(0.3, 20, 600);
+        // eps*L = 2.4 ≈ pi/2 * std for N(0,1) — long trajectories
+        // (eps*L > ~5) land in heavy tails and mix poorly.
+        let sampler = HmcSampler::new(0.2, 12, 600);
         let result = sampler.sample(&density, 99);
         let sd = result.std_dev();
         for &v in &sd {

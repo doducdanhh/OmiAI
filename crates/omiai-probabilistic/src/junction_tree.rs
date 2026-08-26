@@ -89,15 +89,11 @@ impl Potential {
                 .collect()
         };
         let n = 1usize << combined.len();
-        let mut data = vec![1.0f64; n];
+        let mut data = vec![0.0f64; n];
         for mask in 0..n {
-            let mut v = 1.0;
-            for var in &combined {
-                let a = self.get_at(var, mask, &combined);
-                let b = other.get_at(var, mask, &combined);
-                v *= f(a, b);
-            }
-            data[mask] = v;
+            let a = self.eval_mask(mask, &combined);
+            let b = other.eval_mask(mask, &combined);
+            data[mask] = f(a, b);
         }
         Potential {
             vars: combined,
@@ -131,19 +127,56 @@ impl Potential {
         }
     }
 
-    /// Look up the value of `var` at the combined-mask `mask`, returning
-    /// 1.0 if `var` is not in `self.vars`.
-    fn get_at(&self, var: &str, mask: usize, combined: &[String]) -> f64 {
-        let Some(combined_i) = combined.iter().position(|x| x == var) else {
-            return 1.0;
-        };
-        let bit = (mask >> combined_i) & 1 == 1;
-        if !self.vars.contains(&var.to_string()) {
-            return 1.0;
+    /// Evaluate this potential at the assignment encoded by `mask`, where
+    /// bit `i` of `mask` is the value of `combined[i]`. Variables of the
+    /// potential absent from `combined` are summed out (averaged over both
+    /// assignments); variables of `combined` absent from the potential are
+    /// ignored (the potential doesn't depend on them).
+    ///
+    /// For potentials whose variables are all in `combined` — always true in
+    /// [`Self::combine`] since `combined` is the union — this is a direct
+    /// table lookup under the bit reindexing.
+    fn eval_mask(&self, mask: usize, combined: &[String]) -> f64 {
+        // Map this potential's vars into the combined bit positions.
+        // If every var is present, a single lookup suffices.
+        let mut local_mask = 0usize;
+        for (i, v) in self.vars.iter().enumerate() {
+            match combined.iter().position(|c| c == v) {
+                Some(ci) => {
+                    if (mask >> ci) & 1 == 1 {
+                        local_mask |= 1 << i;
+                    }
+                }
+                None => return self.sum_out_missing(i, mask, combined),
+            }
         }
-        let local_i = self.vars.iter().position(|x| x == var).unwrap();
-        let local_mask = if bit { 1 << local_i } else { 0 };
         self.data[local_mask]
+    }
+
+    /// Slow path: some variable of `self` is not in `combined`; average over
+    /// its assignments so combine remains a proper pointwise product.
+    #[cold]
+    fn sum_out_missing(&self, missing_from: usize, mask: usize, combined: &[String]) -> f64 {
+        let mut total = 0.0f64;
+        let missing: Vec<usize> = (missing_from..self.vars.len())
+            .filter(|i| !combined.iter().any(|c| c == &self.vars[*i]))
+            .collect();
+        for sub in 0..(1usize << missing.len()) {
+            let mut local_mask = 0usize;
+            for (i, v) in self.vars.iter().enumerate() {
+                let bit_val = if let Some(pos) = missing.iter().position(|&m| m == i) {
+                    (sub >> pos) & 1
+                } else {
+                    let ci = combined.iter().position(|c| c == v).unwrap();
+                    (mask >> ci) & 1
+                };
+                if bit_val == 1 {
+                    local_mask |= 1 << i;
+                }
+            }
+            total += self.data[local_mask];
+        }
+        total / (1usize << missing.len()) as f64
     }
 
     /// Probability table for a single variable, normalizing to sum=1.
@@ -463,6 +496,31 @@ impl JunctionTree {
         self.distribute(r);
     }
 
+    /// Enter evidence by multiplying a 0/1 indicator potential into the
+    /// first clique containing each observed variable.
+    ///
+    /// Must be called BEFORE [`JunctionTree::calibrate`] — evidence only
+    /// reaches other cliques through message passing, so calibrating on
+    /// the prior and restricting inside `query` cannot account for
+    /// observations outside the queried clique.
+    pub fn enter_evidence(&mut self, evidence: &HashMap<String, bool>) {
+        for (var, val) in evidence {
+            let Some(id) = self.find_clique(var) else {
+                continue;
+            };
+            let pot = &mut self.cliques[id].potential;
+            let Some(i) = pot.vars.iter().position(|v| v == var) else {
+                continue;
+            };
+            for mask in 0..pot.data.len() {
+                let bit = (mask >> i) & 1 == 1;
+                if bit != *val {
+                    pot.data[mask] = 0.0;
+                }
+            }
+        }
+    }
+
     /// Send a message from `from` to `to`: marginalize `from`'s potential
     /// onto the separator variables and store into the separator.
     fn send_message(&mut self, from: usize, to: usize) {
@@ -503,18 +561,23 @@ impl JunctionTree {
         None
     }
 
-    /// Return P(var=true | evidence) using the calibrated tree.
+    /// Return P(var=true | evidence).
+    ///
+    /// Evidence must reach the whole tree via message passing before it
+    /// can influence a variable in a distant clique, so this copies the
+    /// tree, enters the evidence into the cliques ([`JunctionTree::enter_evidence`]),
+    /// recalibrates, then reads off the normalized marginal of `var`.
+    /// Restricting inside a single clique (the old behavior) silently
+    /// ignored evidence outside that clique.
     pub fn query(&self, var: &str, evidence: &HashMap<String, bool>) -> Option<f64> {
-        let clique_id = self.find_clique(var)?;
-        let clique = &self.cliques[clique_id];
-        let mut p = clique.potential.clone();
-        for (e_var, e_val) in evidence {
-            if p.vars.iter().any(|v| v == e_var) {
-                p = restrict(&p, e_var, *e_val);
-            }
-        }
+        self.find_clique(var)?;
+        let mut conditioned = self.clone();
+        conditioned.enter_evidence(evidence);
+        conditioned.calibrate();
+
+        let clique = &conditioned.cliques[conditioned.find_clique(var)?];
         let keep = vec![var.to_string()];
-        let marginal = p.marginalize(&keep).normalize();
+        let marginal = clique.potential.marginalize(&keep).normalize();
         // data[1] is var=true (since vars = [var])
         Some(marginal.data[1])
     }
@@ -638,9 +701,11 @@ mod tests {
 
     #[test]
     fn potential_multiply_and_marginalize() {
-        // Simple chain P(A,B) = P(A) * P(B|A)
+        // Simple chain P(A,B) = P(A) * P(B|A).
+        // Bit convention (crate-wide): bit i of the mask = vars[i], so for
+        // vars ["A","B"] the data order is (A=F,B=F), (A=T,B=F), (A=F,B=T), (A=T,B=T).
         let p_a = Potential::new(vec!["A".into()], vec![0.3, 0.7]);
-        let p_b_given_a = Potential::new(vec!["A".into(), "B".into()], vec![0.8, 0.2, 0.1, 0.9]);
+        let p_b_given_a = Potential::new(vec!["A".into(), "B".into()], vec![0.8, 0.1, 0.2, 0.9]);
         let joint = p_a.multiply(&p_b_given_a);
         assert_eq!(joint.vars.len(), 2);
         let marg = joint.marginalize(&["B".into()]);

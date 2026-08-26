@@ -46,9 +46,9 @@ impl TheoremProver {
     ///
     /// # Example
     /// ```
-    /// use omiai::core::logic_engine::Formula;
-    /// use omiai::core::prover::TheoremProver;
-    /// use omiai::core::inference::ProofResult;
+    /// use omiai_core::logic_engine::Formula;
+    /// use omiai_core::prover::TheoremProver;
+    /// use omiai_core::inference::ProofResult;
     ///
     /// let p = Formula::prop("P");
     /// let q = Formula::prop("Q");

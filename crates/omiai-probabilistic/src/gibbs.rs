@@ -75,6 +75,14 @@ pub fn gibbs_sample(
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let var_names: Vec<String> = bn.nodes.iter().map(|n| n.variable.clone()).collect();
     let n = var_names.len();
+    if n == 0 {
+        // Empty network: nothing to sample, return empty result.
+        return GibbsResult {
+            samples: Vec::new(),
+            marginals: HashMap::new(),
+            iterations: config.iterations,
+        };
+    }
 
     // Initialize assignment: evidence where present, else false
     let mut assignment: HashMap<String, bool> = HashMap::new();

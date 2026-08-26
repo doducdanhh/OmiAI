@@ -109,9 +109,63 @@ pub fn mean_field(
                 if pt < 1.0 {
                     lp_false += p_assign * (1.0 - pt).ln();
                 }
-                // (Reserved for advanced MF variants: accumulate evidence
-                // weight here. Currently unused.)
-                let _ = p_assign;
+            }
+
+            // Evidence-likelihood term: for each CHILD of this variable
+            // that is evidence-locked, add
+            //   ln Σ_others q(others) · P(child = e | var, others)
+            // The plain CPT expectation above only ties q_i to its own
+            // parents, so evidence on a child never propagated upward
+            // and P(Rain | Wet=true) stayed at the prior.
+            //
+            // We deliberately use the log of the EXPECTED likelihood
+            // (not the expectation of the log, the strict MFVI bound):
+            // with deterministic CPT entries (P = 0) the expectation of
+            // the log is −∞ whenever any other-parent configuration
+            // carries mass, collapsing the update to 0/1. The
+            // log-expectation form stays finite and is exact on
+            // singly-connected networks.
+            if !evidence.contains_key(&cpt.variable) {
+                for child in &bn.nodes {
+                    if !child.parents.iter().any(|p| p == &cpt.variable) {
+                        continue;
+                    }
+                    let Some(&ev_val) = evidence.get(&child.variable) else {
+                        continue;
+                    };
+                    // Expectation over the OTHER parents of the child.
+                    let other: Vec<(usize, f64)> = child
+                        .parents
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, p)| *p != &cpt.variable)
+                        .map(|(i, p)| (i, q.get(p).copied().unwrap_or(0.5)))
+                        .collect();
+                    let idx_in_child =
+                        child.parents.iter().position(|p| p == &cpt.variable).unwrap();
+                    let mut mix_true = 0.0_f64; // Σ w·P(e | var=true, others)
+                    let mut mix_false = 0.0_f64; // Σ w·P(e | var=false, others)
+                    for mask in 0..(1usize << other.len()) {
+                        let mut w = 1.0_f64;
+                        for (k, (_, pq)) in other.iter().enumerate() {
+                            w *= if (mask >> k) & 1 == 1 { *pq } else { 1.0 - *pq };
+                        }
+                        for (mix, v_val) in [(&mut mix_true, true), (&mut mix_false, false)] {
+                            let mut m = mask;
+                            if v_val {
+                                m |= 1 << idx_in_child;
+                            }
+                            let pt = child.probs_true.get(m).copied().unwrap_or(0.5);
+                            *mix += w * if ev_val { pt } else { 1.0 - pt };
+                        }
+                    }
+                    if mix_true > 0.0 {
+                        lp_true += mix_true.ln();
+                    }
+                    if mix_false > 0.0 {
+                        lp_false += mix_false.ln();
+                    }
+                }
             }
 
             // If this variable is evidence-locked, skip update

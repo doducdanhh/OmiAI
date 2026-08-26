@@ -322,51 +322,96 @@ fn state_signature(state: &BTreeSet<LtlFormula>, atom_vec: &[String]) -> Vec<u8>
 }
 
 /// Compute all possible "next" states from `state`.
+///
+/// Follows the one-step tableau identities:
+///   F φ   ≡ φ ∨ X(F φ)
+///   G φ   ≡ φ ∧ X(G φ)
+///   φ U ψ ≡ ψ ∨ (φ ∧ X(φ U ψ))
+///
+/// Disjuncts become *branches*: every combination of local expansions
+/// yields one candidate successor.
 fn compute_successors(
     state: &BTreeSet<LtlFormula>,
     atom_vec: &[String],
 ) -> Vec<BTreeSet<LtlFormula>> {
-    // The next state contains X(φ) for every X(φ) ∈ state,
-    // plus Until expansions.
     let mut base: BTreeSet<LtlFormula> = BTreeSet::new();
+    // Each entry is a list of mutually exclusive local expansions;
+    // successors are the cartesian product over these choices.
+    let mut alternatives: Vec<Vec<BTreeSet<LtlFormula>>> = Vec::new();
+
     for f in state {
         match f {
             LtlFormula::Next(g) => {
                 base.insert((**g).clone());
             }
-            LtlFormula::Until(p, q) => {
-                // p U q in current state, but q not in current ⇒ X(p U q) in next
-                if !state.contains(q) {
-                    base.insert(f.clone());
+            LtlFormula::Eventually(p) => {
+                if state.contains(p) {
+                    // Fulfilled at this position; no future obligation.
+                } else {
+                    // Branch: satisfy φ in the next state, or carry F φ.
+                    let mut fulfil = BTreeSet::new();
+                    fulfil.insert((**p).clone());
+                    let mut defer = BTreeSet::new();
+                    defer.insert(f.clone());
+                    alternatives.push(vec![fulfil, defer]);
                 }
-                // Always include p for the next-step U expansion
-                base.insert((**p).clone());
+            }
+            LtlFormula::Globally(g) => {
+                // G φ persists forever and forces φ now (via expansion).
+                base.insert((**g).clone());
+                base.insert(f.clone());
+            }
+            LtlFormula::Until(p, q) => {
+                // Branch: ψ happens next (obligation discharged),
+                // or φ holds next and the obligation persists.
+                let mut fulfil = BTreeSet::new();
+                fulfil.insert((**q).clone());
+                let mut defer = BTreeSet::new();
+                defer.insert((**p).clone());
+                defer.insert(f.clone());
+                alternatives.push(vec![fulfil, defer]);
             }
             _ => {}
         }
     }
-    expand_at_state(&mut base);
 
-    // For atoms, we don't know which are true/false in the next state
-    // unless constrained. Without an explicit model, we conservatively
-    // branch over all 2^n atom assignments (n ≤ 4 for tractability).
-    if atom_vec.len() > 4 {
-        // Too many atoms to enumerate; just return one conservative branch
-        return vec![base];
-    }
-    let n = atom_vec.len();
-    let mut results = Vec::new();
-    for mask in 0..(1usize << n) {
-        let mut branch = base.clone();
-        for (i, a) in atom_vec.iter().enumerate() {
-            if (mask >> i) & 1 == 1 {
-                branch.insert(LtlFormula::Atom(a.clone()));
-            } else {
-                branch.insert(LtlFormula::Not(Box::new(LtlFormula::Atom(a.clone()))));
+    // Cartesian product of the branch choices, merged onto `base`.
+    let mut cores: Vec<BTreeSet<LtlFormula>> = vec![base];
+    for opts in &alternatives {
+        let mut next_cores = Vec::with_capacity(cores.len() * opts.len());
+        for core in &cores {
+            for opt in opts {
+                let mut merged = core.clone();
+                merged.extend(opt.iter().cloned());
+                next_cores.push(merged);
             }
         }
-        if is_consistent(&branch, atom_vec) {
-            results.push(branch);
+        cores = next_cores;
+    }
+
+    let n_atoms = atom_vec.len();
+    let mut results = Vec::new();
+    for core in &mut cores {
+        expand_at_state(core);
+        // For atoms, we don't know which are true/false in the next
+        // state unless constrained; branch over all 2^n assignments
+        // (n ≤ 4 for tractability).
+        if n_atoms > 4 {
+            results.push(core.clone());
+            continue;
+        }
+        for mask in 0..(1usize << n_atoms) {
+            let mut branch = core.clone();
+            for (i, a) in atom_vec.iter().enumerate() {
+                if (mask >> i) & 1 == 1 {
+                    branch.insert(LtlFormula::Atom(a.clone()));
+                } else {
+                    branch.insert(LtlFormula::Not(Box::new(LtlFormula::Atom(a.clone()))));
+                }
+            }
+            if is_consistent(&branch, atom_vec) {
+                results.push(branch);
+            }
         }
     }
     results

@@ -139,10 +139,10 @@ impl KnowledgeGraph {
         let mut pairs = Vec::new();
         for (id_a, &na) in &self.index {
             for (id_b, &nb) in &self.index {
-                if id_a == id_b {
-                    continue;
-                }
-                // Filtered reachability: only walk edges of this kind
+                // Filtered reachability: only walk edges of this kind.
+                // Self-pairs are NOT skipped: a direct self-loop edge
+                // witnesses ("a", "a"), while without one
+                // `reachable_via` correctly reports no path.
                 if reachable_via(&self.graph, na, nb, relation_kind) {
                     pairs.push((id_a.clone(), id_b.clone()));
                 }
@@ -255,6 +255,14 @@ fn reachable_via(
     goal: NodeIndex,
     kind: &str,
 ) -> bool {
+    // A direct self-loop edge (start == goal) counts as reachability —
+    // the edge itself witnesses the path of length 1.
+    if graph
+        .edges_directed(start, Direction::Outgoing)
+        .any(|e| e.weight().kind == kind && e.target() == goal)
+    {
+        return true;
+    }
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     queue.push_back(start);

@@ -375,15 +375,18 @@ mod tests {
 
     #[test]
     fn pregroup_transitive_verb_reduces_via_subj_obj() {
-        // n · n^r · s · n^l · n  →  s after adjoints cancel.
+        // Subject n, verb n^r·s·n^l, object n concatenate to
+        // n · n^r · s · n^l · n. The adjoint pairs cancel pairwise,
+        // leaving exactly the sentence atom `s`.
         let mut ty = PregroupType::np().0;
         let mut verb = PregroupType::transitive_verb().0;
         let mut obj = PregroupType::np().0;
         ty.append(&mut verb);
         ty.append(&mut obj);
-        let combined = PregroupType(ty);
-        assert!(
-            combined.is_well_typed(),
+        let combined = PregroupType(ty).reduce();
+        assert_eq!(
+            combined,
+            PregroupType::sentence(),
             "transitive sentence must reduce to s"
         );
     }

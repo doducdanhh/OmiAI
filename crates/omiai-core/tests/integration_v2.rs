@@ -161,6 +161,12 @@ fn discocat_parses_two_sentences_and_compares() {
 // ---------------------------------------------------------------------------
 
 fn synth_env(seed: u64, env: usize, n: usize) -> Vec<IcpSample> {
+    // Intervene on the input distribution per environment (wider x0
+    // spread) while keeping the mechanism y = 2·x0 + ε fixed. Without
+    // input heterogeneity no subset omitting the true parent can be
+    // rejected systematically — that is an assumption of ICP itself,
+    // not a weakness of the estimator.
+    let span = 1.0 + env as f64 * 1.5;
     let mut state = seed;
     let mut next = || {
         state = state
@@ -170,7 +176,7 @@ fn synth_env(seed: u64, env: usize, n: usize) -> Vec<IcpSample> {
     };
     (0..n)
         .map(|_| {
-            let x0 = next() * 2.0 - 1.0;
+            let x0 = next() * 2.0 * span - span;
             let x1 = next() * 2.0 - 1.0;
             let x2 = next() * 2.0 - 1.0;
             // y depends on x0 only — x1, x2 are noise
@@ -186,9 +192,11 @@ fn synth_env(seed: u64, env: usize, n: usize) -> Vec<IcpSample> {
 
 #[test]
 fn icp_identifies_single_true_parent() {
-    let env_a = synth_env(11, 0, 50);
-    let env_b = synth_env(23, 1, 50);
-    let env_c = synth_env(47, 2, 50);
+    // Enough samples per environment for the Welch residual test to
+    // reliably reject non-invariant subsets at p < 0.05.
+    let env_a = synth_env(11, 0, 400);
+    let env_b = synth_env(23, 1, 400);
+    let env_c = synth_env(47, 2, 400);
     let mut all = env_a;
     all.extend(env_b);
     all.extend(env_c);
@@ -246,7 +254,7 @@ fn markov_blanket_picks_internal_state() {
 
 #[derive(Clone)]
 struct TicTacToeLite {
-    pos: u8, // bit i = whether cell i is "X"
+    pos: u16, // bit i = whether cell i is "X" (u16: 9 cells need bits 0..=8)
 }
 
 impl GameState for TicTacToeLite {
@@ -256,7 +264,7 @@ impl GameState for TicTacToeLite {
     }
     fn apply(&self, action: &u8) -> Self {
         TicTacToeLite {
-            pos: self.pos | (1 << action),
+            pos: self.pos | (1u16 << action),
         }
     }
     fn is_terminal(&self) -> bool {

@@ -40,14 +40,21 @@ pub fn sparse_random_matrix(
         .collect()
 }
 
-/// Estimate spectral radius of a square matrix via power iteration.
+/// Estimate spectral radius |λ| of a square matrix via power iteration.
+///
+/// Returns the norm of the final product ‖W·v‖ with `v` a unit vector,
+/// instead of a Rayleigh quotient: for non-symmetric matrices whose
+/// dominant eigenvalue is complex (conjugate pair), the iterates rotate
+/// and the Rayleigh quotient oscillates without converging, while
+/// ‖W·v‖ still approaches ρ once `v` aligns with the dominant
+/// invariant subspace.
 pub fn spectral_radius(matrix: &[Vec<f64>], iters: usize) -> f64 {
     let n = matrix.len();
     if n == 0 {
         return 0.0;
     }
     let mut v = vec![1.0 / (n as f64).sqrt(); n];
-    let mut lambda = 0.0;
+    let mut rho = 0.0;
     for _ in 0..iters {
         let mut w = vec![0.0; n];
         for i in 0..n {
@@ -58,25 +65,13 @@ pub fn spectral_radius(matrix: &[Vec<f64>], iters: usize) -> f64 {
             }
             w[i] = s;
         }
-        let norm = w.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-15);
+        rho = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let norm = rho.max(1e-15);
         for i in 0..n {
             v[i] = w[i] / norm;
         }
-        // Rayleigh quotient
-        let mut num = 0.0;
-        let mut den = 0.0;
-        for i in 0..n {
-            let row = &matrix[i];
-            let mut av = 0.0;
-            for j in 0..n.min(row.len()) {
-                av += row[j] * v[j];
-            }
-            num += v[i] * av;
-            den += v[i] * v[i];
-        }
-        lambda = num / den.max(1e-15);
     }
-    lambda.abs()
+    rho.abs()
 }
 
 /// Rescale a square matrix so its spectral radius equals `target`.

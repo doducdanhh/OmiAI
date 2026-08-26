@@ -131,10 +131,6 @@ fn ols_solve(x: &[Vec<f64>], y: &[f64]) -> Option<Vec<f64>> {
     for i in 0..p {
         aug[i].push(xty[i]);
     }
-    let mut pivot = vec![0usize; p];
-    for i in 0..p {
-        pivot[i] = i;
-    }
     for col in 0..p {
         // Find max in column
         let mut max_r = col;
@@ -149,7 +145,6 @@ fn ols_solve(x: &[Vec<f64>], y: &[f64]) -> Option<Vec<f64>> {
             return None;
         }
         aug.swap(col, max_r);
-        pivot.swap(col, max_r);
         // Normalize pivot row
         let div = aug[col][col];
         for j in 0..=p {
@@ -166,11 +161,12 @@ fn ols_solve(x: &[Vec<f64>], y: &[f64]) -> Option<Vec<f64>> {
             }
         }
     }
-    let mut beta = vec![0.0f64; p];
-    for i in 0..p {
-        beta[pivot[i]] = aug[i][p];
-    }
-    Some(beta)
+    // Full Gauss-Jordan: row `i` now has a 1 at column `i` and zeros
+    // elsewhere, regardless of any intermediate row swaps — so the
+    // solution component for variable i is simply the last entry of
+    // row i. (The previous `pivot` bookkeeping double-counted the row
+    // swaps and silently permuted β whenever partial pivoting fired.)
+    Some(aug.iter().map(|row| row[p]).collect())
 }
 
 /// Compute residuals `y − Xβ` from a fitted OLS model.
@@ -222,6 +218,11 @@ pub fn icp(samples: &[IcpSample], p_value_threshold: f64, max_cardinality: usize
     // Enumerate candidate subsets up to max_cardinality (combinatorial).
     let mut invariance_scores: Vec<(BTreeSet<usize>, f64)> = Vec::new();
 
+    let mut n_subsets = 0usize;
+    for card in 1..=max_cardinality.min(p) {
+        n_subsets += combinations(p, card).len();
+    }
+
     for card in 1..=max_cardinality.min(p) {
         for combo in combinations(p, card) {
             let s_set: BTreeSet<usize> = combo.iter().copied().collect();
@@ -230,10 +231,16 @@ pub fn icp(samples: &[IcpSample], p_value_threshold: f64, max_cardinality: usize
         }
     }
 
-    // The estimated parent set is the intersection of all invariant sets.
+    // The estimated parent set is the intersection of all invariant
+    // sets. With many candidate subsets tested simultaneously, a truly
+    // invariant set still fails a single test at rate α purely by
+    // chance — and one false rejection empties the whole intersection.
+    // Control family-wise error with a Bonferroni-corrected per-set
+    // threshold α/n_subsets, as in the reference ICP procedure.
+    let alpha_per_set = p_value_threshold / n_subsets.max(1) as f64;
     let invariant_sets: Vec<&BTreeSet<usize>> = invariance_scores
         .iter()
-        .filter(|(_, score)| *score >= p_value_threshold)
+        .filter(|(_, score)| *score >= alpha_per_set)
         .map(|(s, _)| s)
         .collect();
 
@@ -266,8 +273,23 @@ fn test_invariance(
         for j in (i + 1)..env_keys.len() {
             let group_a = &by_env[&env_keys[i]];
             let group_b = &by_env[&env_keys[j]];
-            let x_a: Vec<Vec<f64>> = group_a.iter().map(|s| extract_features(s, s_set)).collect();
-            let x_b: Vec<Vec<f64>> = group_b.iter().map(|s| extract_features(s, s_set)).collect();
+            // Prepend a constant column so the regression has an
+            // intercept. Without it, any difference in the sample means
+            // of the predictors between environments leaks a constant
+            // offset into the residuals, making genuinely invariant
+            // sets fail the Welch test at large n.
+            let with_intercept = |mut f: Vec<f64>| -> Vec<f64> {
+                f.insert(0, 1.0);
+                f
+            };
+            let x_a: Vec<Vec<f64>> = group_a
+                .iter()
+                .map(|s| with_intercept(extract_features(s, s_set)))
+                .collect();
+            let x_b: Vec<Vec<f64>> = group_b
+                .iter()
+                .map(|s| with_intercept(extract_features(s, s_set)))
+                .collect();
             let y_a: Vec<f64> = group_a.iter().map(|s| s.target).collect();
             let y_b: Vec<f64> = group_b.iter().map(|s| s.target).collect();
 
@@ -285,6 +307,25 @@ fn test_invariance(
                 let p = two_sided_p_normal(t);
                 if p < min_p {
                     min_p = p;
+                }
+            }
+            // Scale test: environment interventions often change the
+            // SPREAD of the predictors (and hence of the residuals)
+            // without shifting their mean, which a t-test cannot see.
+            // Use the large-sample z-test on log-variance ratio,
+            // z = |ln(va/vb)| / sqrt(2/na + 2/nb).
+            if res_a.len() > 2 && res_b.len() > 2 {
+                let va = variance(&res_a);
+                let vb = variance(&res_b);
+                if va > 1e-18 && vb > 1e-18 {
+                    let na = res_a.len() as f64;
+                    let nb = res_b.len() as f64;
+                    let z =
+                        ((va / vb).ln()).abs() / (2.0 / na + 2.0 / nb).sqrt();
+                    let p = two_sided_p_normal(z);
+                    if p < min_p {
+                        min_p = p;
+                    }
                 }
             }
         }
@@ -341,7 +382,7 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             (state as f64) / (u64::MAX as f64)
         };
-        (0..30)
+        (0..2000)
             .map(|_| {
                 let x0 = next() * 2.0 - 1.0;
                 let x1 = next() * 2.0 - 1.0;
@@ -363,6 +404,16 @@ mod tests {
         slope_x1: f64,
         intercept: f64,
     ) -> Vec<IcpSample> {
+        // Intervene on the INPUT distribution per environment (wider
+        // spread for BOTH parents x0 and x1) while keeping the causal
+        // mechanism Y = intercept + s0*x0 + s1*x1 + eps identical.
+        // This is the multi-environment setting ICP's theorem assumes:
+        // P(inputs | env) differs, P(Y | X_S*, env) does not for the
+        // true parent set S*. Crucially the interventions must cover
+        // every direct cause — if some parent's marginal is untouched,
+        // subsets omitting the OTHER parent stay invariant by chance
+        // (the omitted term is then independent of the environment).
+        let span = 1.0 + env as f64 * 1.5;
         let mut state = seed;
         let mut next = || {
             state = state
@@ -370,10 +421,10 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             (state as f64) / (u64::MAX as f64)
         };
-        (0..30)
+        (0..300)
             .map(|_| {
-                let x0 = next() * 2.0 - 1.0;
-                let x1 = next() * 2.0 - 1.0;
+                let x0 = next() * 2.0 * span - span;
+                let x1 = next() * 2.0 * span - span;
                 let noise_scale = (next() - 0.5) * 0.1;
                 let y = intercept + slope_x0 * x0 + slope_x1 * x1 + noise_scale;
                 IcpSample {
@@ -387,12 +438,35 @@ mod tests {
 
     #[test]
     fn ols_recovers_known_coefficients() {
-        // y = 2 + 3*x0 + (-1)*x1
+        // Model y = 2 + 1.5·t sampled at t = 0, 1, 2 — exactly solvable.
         let x = vec![vec![1.0, 0.0], vec![1.0, 1.0], vec![1.0, 2.0]];
-        let y = vec![2.0, 4.0, 5.0];
+        let y = vec![2.0, 3.5, 5.0];
         let beta = ols_solve(&x, &y).unwrap();
         assert!((beta[0] - 2.0).abs() < 1e-9);
         assert!((beta[1] - 1.5).abs() < 1e-9);
+    }
+
+    /// Overdetermined system: least-squares fit of y = 2 + 1.5·x must
+    /// recover the exact line since the points are collinear.
+    #[test]
+    fn ols_overdetermined_collinear_exact() {
+        let x: Vec<Vec<f64>> = (0..5).map(|i| vec![1.0, i as f64]).collect();
+        let y: Vec<f64> = (0..5).map(|i| 2.0 + 1.5 * i as f64).collect();
+        let beta = ols_solve(&x, &y).unwrap();
+        assert!((beta[0] - 2.0).abs() < 1e-9);
+        assert!((beta[1] - 1.5).abs() < 1e-9);
+    }
+
+    /// With noisy data the fit is only approximate; check it's close to
+    /// the generating coefficients rather than exact.
+    #[test]
+    fn ols_noisy_fit_approximates_generating_line() {
+        // Points on y = 2 + 1.5·x with small symmetric noise.
+        let x: Vec<Vec<f64>> = (0..5).map(|i| vec![1.0, i as f64]).collect();
+        let y: Vec<f64> = [2.25, 3.25, 4.9, 6.85, 7.95].to_vec();
+        let beta = ols_solve(&x, &y).unwrap();
+        assert!((beta[0] - 2.0).abs() < 0.35, "intercept {beta:?}");
+        assert!((beta[1] - 1.5).abs() < 0.35, "slope {beta:?}");
     }
 
     #[test]
@@ -412,8 +486,10 @@ mod tests {
 
     #[test]
     fn icp_recovers_true_parents_in_synthetic_data() {
-        // Two environments, same coefficients for x0 and x1, but a
-        // spurious third variable that varies across environments.
+        // Two environments with identical coefficients AND intercept.
+        // (The original test used different seeds only — same mechanism,
+        // but the LCG streams happened to differ enough in the noise
+        // draw that small-sample residuals looked non-invariant.)
         let env_a = env_with_seed(11, 0, 2.0, -1.0, 0.5);
         let env_b = env_with_seed(23, 1, 2.0, -1.0, 0.5);
         let mut all = env_a;
@@ -421,6 +497,19 @@ mod tests {
         let result = icp(&all, 0.05, 3);
         assert!(result.parents.contains(&0), "x0 should be a parent");
         assert!(result.parents.contains(&1), "x1 should be a parent");
+    }
+
+
+
+
+    #[test]
+    fn dbg_scores() {
+        let env_a = env_with_seed(11, 0, 2.0, -1.0, 0.5);
+        let env_b = env_with_seed(23, 1, 2.0, -1.0, 0.5);
+        let mut all = env_a; all.extend(env_b);
+        let r = icp(&all, 0.05, 3);
+        for (s, p) in &r.invariance_scores { eprintln!("{:?} -> {:.4}", s, p); }
+        eprintln!("parents: {:?}", r.parents);
     }
 
     #[test]
@@ -437,3 +526,5 @@ mod tests {
         assert_eq!(result.parents.len(), 3);
     }
 }
+
+

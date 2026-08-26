@@ -463,21 +463,66 @@ pub fn formula_to_clauses(f: &Formula) -> Result<Vec<Vec<Literal>>, LogicError> 
 
     let mut conjuncts = Vec::new();
     collect_and(f, &mut conjuncts);
+    // A bare `True` (or `True` nested under Or) would surface as an
+    // empty — unsatisfiable — clause; a bare `False` under Or silently
+    // vanished. Both are handled here so clause extraction preserves
+    // truth: `True` yields the empty clause set (vacuously satisfied),
+    // `False` yields one empty clause (unsatisfiable).
+    if matches!(conjuncts.as_slice(), [Formula::True]) {
+        return Ok(Vec::new());
+    }
     let mut clauses = Vec::new();
     for c in conjuncts {
-        let mut lits = Vec::new();
-        collect_or(&c, &mut lits)?;
-        clauses.push(lits);
+        match c {
+            Formula::False => return Ok(vec![Vec::new()]),
+            Formula::True => continue,
+            ref other => {
+                let mut lits = Vec::new();
+                collect_or(other, &mut lits)?;
+                clauses.push(lits);
+            }
+        }
     }
     Ok(clauses)
 }
 
-/// Run the full CNF normalization pipeline (passes 1-5) and return the
-/// resulting clause set.
+/// Fold away `True`/`False` constants in a quantifier-free formula so
+/// that clause extraction is truth-preserving: `collect_and` treats every
+/// conjunct as a clause (so a bare `True` would become an empty —
+/// unsatisfiable — clause) and `collect_or` silently drops constants
+/// (so `p ∨ True` would lose its trivial satisfiability).
+pub fn fold_constants(f: &Formula) -> Formula {
+    match f {
+        Formula::And(a, b) => match (fold_constants(a), fold_constants(b)) {
+            (Formula::True, r) | (r, Formula::True) => r,
+            (Formula::False, _) | (_, Formula::False) => Formula::False,
+            (l, r) => Formula::And(Box::new(l), Box::new(r)),
+        },
+        Formula::Or(a, b) => match (fold_constants(a), fold_constants(b)) {
+            (Formula::False, r) | (r, Formula::False) => r,
+            (Formula::True, _) | (_, Formula::True) => Formula::True,
+            (l, r) => Formula::Or(Box::new(l), Box::new(r)),
+        },
+        Formula::Not(a) => {
+            let inner = fold_constants(a);
+            match inner {
+                Formula::True => Formula::False,
+                Formula::False => Formula::True,
+                other => Formula::Not(Box::new(other)),
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// Run the full CNF normalization pipeline (passes 1-6) and return the
+/// resulting clause set. Constant folding runs after NNF (where all
+/// negations sit directly on atoms) so `¬True` has already collapsed.
 pub fn normalize_cnf(f: &Formula) -> Result<Vec<Vec<Literal>>, LogicError> {
     let step1 = eliminate_iff_implies(f);
     let step2 = to_nnf(&step1);
-    let step3 = skolemize(&step2);
+    let step2b = fold_constants(&step2);
+    let step3 = skolemize(&step2b);
     let step4 = drop_universal_quantifiers(&step3);
     let step5 = distribute_cnf(&step4);
     formula_to_clauses(&step5)
