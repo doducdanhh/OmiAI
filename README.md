@@ -19,7 +19,7 @@ backpropagation, criterion benchmarks before any performance claim.
 
 ## Status: what's actually implemented (and tested)
 
-`cargo test --workspace` currently runs **226 tests across 36 test
+`cargo test --workspace` currently runs **272 tests across 38 test
 targets, all passing**, plus proptests and doc tests. Highlights:
 
 - **`omiai-core`** — full first-order logic stack: Formula/Term AST, CNF
@@ -47,11 +47,20 @@ targets, all passing**, plus proptests and doc tests. Highlights:
   text into logic formulas ("every human is mortal" → ∀x(Human(x)→Mortal(x))).
 - **`omiai-world`** — reversible Margolus block cellular automaton with
   HashLife-style caching and rayon sweeps; population conservation is
-  proptest-checked.
+  proptest-checked. Slice 2 adds the living layer: `FormulaRegistry`
+  (generational arena of LTL genomes), atoms with energy metabolism /
+  feeding / reproduction, agents that decode a propositional policy from
+  their LTL genome over 4-direction observations, the deterministic
+  5-phase world loop (ChaCha8-seeded — same seed ⇒ bit-exact trajectory),
+  arity-preserving mutation, and world-invariant proptests.
 - **`omiai-checkpoint`** — checkpoint-v1 directory format:
   `Checkpointable` trait, BLAKE3 hashing, atomic writes
   (tmp→fsync→rename→dir-fsync), manifest verification with tamper
-  detection, and byte-exact CA-grid round-trip + conservation proptests.
+  detection, byte-exact CA-grid round-trip + conservation proptests,
+  retention window (keep-N recent + milestones), `index.json` with
+  rebuild fallback, and the slice-2 world bundle — grid + atoms +
+  registry + RNG state with **bit-exact resume** proven by round-trip
+  test.
   Format spec: [`docs/format-spec/checkpoint-v1.md`](docs/format-spec/checkpoint-v1.md).
 
 Integration tests wire pillars together end-to-end (NLP → logic → proof;
@@ -60,16 +69,17 @@ the same posterior).
 
 ## What's scaffolded (types + doc comments, not yet implemented)
 
-- `omiai-world`: agents, communication, resources, world loop — only the
-  CA substrate is real so far.
+- `omiai-world`: communication and multi-species ecology — the substrate,
+  agents, world loop and checkpoint resume are real; inter-agent
+  signaling is not.
 - `omiai-core`: parts of ASP solving and higher-order unification.
 - `omiai-knowledge::discocat`, `omiai-probabilistic::{kolmogorov,
   solomonoff}`, `omiai-causal::icp` (narrow), `omiai-memory::procedural`.
 - `omiai-export` (model.omiai tar+zstd bundles), `omiai-runtime`
   (`load(bundle)` + step loop), `omiai-serve` (axum `/infer`),
   `omiai-cli` — thin shells awaiting the slices that need them.
-- Checkpoint retention window (keep-N + milestones) and remaining
-  checkpoint payloads (logic clauses, graphs, populations, DAGs).
+- Remaining checkpoint payloads (logic clauses, graphs, populations,
+  DAGs) — grid + world bundle are done.
 
 Each scaffold module's doc comment states what it is meant to hold.
 
@@ -78,8 +88,10 @@ Each scaffold module's doc comment states what it is meant to hold.
 1. ~~core unification → inference → prover~~ ✅ done and tested
 2. ~~knowledge graph + chaining~~ ✅ · probabilistic/causal core ✅ ·
    neuro reservoirs ✅ · evolution CGP ✅ · memory ✅
-3. `omiai-world`: agents + world loop over the existing substrate
-4. Checkpoint payloads for every pillar + retention policy
+3. ~~`omiai-world`: agents + world loop over the existing substrate~~ ✅
+   done and tested
+4. ~~Checkpoint payloads for every pillar + retention policy~~ — world
+   bundle ✅ + retention ✅ · other pillars' payloads remain
 5. `omiai-runtime`: deterministic resume from checkpoints
 6. `omiai-export` / `omiai-serve` / `omiai-cli`
 7. Meta-cognition last, once it has a prover and search worth improving
@@ -88,7 +100,7 @@ Each scaffold module's doc comment states what it is meant to hold.
 
 ```sh
 cargo build --workspace
-cargo test --workspace          # 226+ tests
+cargo test --workspace          # 272+ tests
 cargo clippy --workspace --all-targets
 cargo bench -p omiai-world       # or omiai-core / others
 ```
