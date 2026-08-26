@@ -170,19 +170,23 @@ step_XXXXXXXX/
   bit-exact với world chạy liền N+M không qua checkpoint (so `cells`,
   `atoms`, `step_count`, toàn bộ registry formulas).
 
-## 3. RNG deterministic — quyết định chốt trước khi viết plan
+## 3. RNG deterministic — ĐÃ CHỐT (probe API rand_chacha 0.3.1 ngày 2026-08-26)
 
 Yêu cầu: serialize state RNG sau N bước để resume đúng quỹ đạo.
 
-- Kế hoạch A: `ChaCha8Rng` — probe API `rand_chacha` thực tế; nếu expose
-  được core state (qua `rand_core::block::BlockRng` / `TryRngCore`) thì
-  serialize raw words.
-- **Fallback B (chốt nếu A rắc rối hơn nửa ngày): tự viết
-  `Xorshift64Star`** (~20 dòng, state 8 byte, serialize tầm thường,
-  đã biết fixed-point seed=0 nên seed strategy tránh 0). Toàn bộ randomness
-  của world đi qua nó. Đổi: chất lượng thống kê thấp hơn ChaCha8; lấy được:
-  đơn giản, đúng đắn, resume chắc chắn bit-exact.
-- Quyết định cuối ghi vào ADR-0006 kèm lý do đo đạc được.
+**Kế hoạch A thắng:** `rand_chacha` 0.3.1 expose đủ bộ API cần:
+`SeedableRng::from_seed([u8;32])`, `set_stream(u64)`, `get_stream() -> u64`,
+`get_word_pos() -> u128`, `set_word_pos(u128)`. Bộ `(seed[32], stream,
+word_pos)` tái tạo đúng trạng thái generator — đã xác minh bằng đọc mã nguồn
+crate trong cargo registry.
+
+- World giữ `rng_seed: [u8;32]`, `rng_stream: u64` cố định sau khởi tạo +
+  `rng: ChaCha8Rng` chạy; checkpoint lưu cả ba (`world/rng_state.bin`:
+  32B seed + u64 LE stream + u128 LE word_pos).
+- Load: `from_seed(seed)` → `set_stream(stream)` → `set_word_pos(word_pos)`
+  → generator tiếp tục đúng dãy.
+- Không cần Xorshift fallback (Kế hoạch B bỏ).
+- Ghi ADR-0006 với kết quả probe này.
 
 ## 4. Testing
 
