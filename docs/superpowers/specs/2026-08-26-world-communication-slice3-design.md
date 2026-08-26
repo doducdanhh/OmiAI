@@ -118,13 +118,34 @@ pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula; // wr
 - **Thứ tự tiêu thụ RNG cố định** (điều kiện của bit-exact resume): trong
   mỗi lần sinh, rút cho gene di chuyển trước, rồi mới rút cho voice. Ghi
   rõ trong doc comment vì đây là thứ tự mà checkpoint phụ thuộc vào.
+- **Cha câm → con câm.** `voice.len() == 0` không có arm nào để đột biến,
+  nên câm là tính trạng di truyền và dòng dõi đó im lặng mãi. Không âm
+  thầm cấp voice cho con của atom câm: `World::new` là chỗ duy nhất tạo
+  voice từ không khí, và mục 6.4 là chỗ duy nhất còn lại.
+
+### 2.4 Voice KHÔNG phụ thuộc `heard` — và giá của lựa chọn khác
+
+Voice arm chỉ đánh giá trên 16 mệnh đề không gian ở mục 2.1. Nó **không**
+đọc `hear*`.
+
+Lý do là bắt buộc, không phải sở thích: mọi atom phát cùng lúc trong
+`speak`, nên nếu arm đọc airwave đang-ghi-dở thì ký hiệu phát ra phụ
+thuộc thứ tự Vec — đúng cái mà việc tách phase sinh ra để tránh. Muốn arm
+nghe được thì phải đọc airwave của **bước trước**, tức airwave trở thành
+trạng thái bền và bit-exact resume phải checkpoint nó
+(`communication/airwave.bin`, một payload nữa + một bất biến hai buffer).
+
+Hệ quả phải nói thẳng: **vọng lại (echo) và lan truyền nhiều chặng
+(relay) KHÔNG diễn đạt được ở lát cắt 3.** Đây là hoãn có chủ ý kèm giá
+đã biết, không phải khả năng để ngỏ cho người đọc tự suy diễn. Lát cắt
+sau thêm payload airwave là có relay.
 
 ## 3. Phía nhận
 
 - `Observation` thêm `heard: Option<Symbol>` — ký hiệu do atom đứng ở ô
   theo hướng đó phát ra (`None` nếu ô không có atom, hoặc atom đó im lặng).
-  Đi vào neighbourhood valuation ở mục 2.1, nên **sender nói được về cái
-  nó nghe được** (hành vi vọng lại / relay diễn đạt được, chi phí 0).
+  Chỉ dùng cho phía **nhận** (mệnh đề tổng hợp dưới đây), KHÔNG vào
+  valuation của voice arm — xem mục 2.4.
 - Valuation di chuyển thêm mệnh đề tổng hợp `hear0..hear3`: `heark` đúng
   ở **mọi hướng** nếu CÓ BẤT KỲ atom kề nào phát ký hiệu k. Đây là mệnh
   đề receiver hành động được.
@@ -142,9 +163,27 @@ thức ăn**, KHÔNG phải đặt tên referential đầy đủ.
 
 ## 4. Vocabulary + mutual information
 
-Biến trạng thái `M` = **hướng tài nguyên gần nhất quanh sender**, 5 lớp:
-`North / East / South / West / None`. Quét theo thứ tự cố định N,E,S,W;
-`res` là ô giá trị ≥ 2 trong 4 ô kề.
+Biến trạng thái `M` = **hướng ô tài nguyên KỀ sender**, 5 lớp:
+`North / East / South / West / None`.
+
+Luật tính `state_class`, deterministic hoàn toàn:
+
+1. Quét đúng thứ tự `N, E, S, W`; ô đầu tiên có giá trị ≥ 2 thắng. Hoà là
+   chuyện thường (hai ô kề đều có tài nguyên) và luật thứ tự này giải
+   quyết hết. Cùng thứ tự ưu tiên mà `decide` và `first_free_neighbor`
+   đang dùng.
+2. **Bán kính đúng bằng 1** — chỉ 4 ô kề, không xa hơn. Không có khái
+   niệm "gần nhất" cần tìm kiếm.
+3. **Giá trị tài nguyên không phân định hoà**: 3 không hơn 2.
+4. `res` bỏ qua tình trạng chiếm: giá trị ≥ 2 là tài nguyên dù có atom
+   đứng trên đó hay không — đúng như `observe()`. Trường hợp này có thật,
+   không phải giả thiết: `ca_step` (Margolus) dịch chuyển giá trị ô nên
+   có thể đẩy tài nguyên vào ô đang bị chiếm.
+
+Nguyên tắc chung phía sau cả bốn luật: **`M` phải là hàm của đúng cái
+sender quan sát được.** Một biến trạng thái phụ thuộc ô hoặc phân biệt mà
+16 mệnh đề của sender không có sẽ kéo MI xuống vì lý do cấu trúc — cùng
+một sai lầm với việc chặn bảng ký hiệu dưới 5 giá trị.
 
 ```rust
 // communication.rs
@@ -190,8 +229,32 @@ ca_step → metabolism → speak → agent_act → reproduce_and_evolve → snap
 2. Với mỗi atom còn sống (thứ tự Vec, deterministic): tính neighbourhood
    valuation, decode arm → `SignalValue`, ghi vào `airwave[y*w+x]`.
 3. `vocabulary.record(signal, state_class(atom))` — cho **mọi** atom còn
-   sống, kể cả atom câm (record `Silent`). Đây là điều kiện của bất biến
-   `total == Σ số atom sống mỗi bước` ở mục 7.
+   sống, kể cả atom câm (record `Silent`).
+
+**Thời điểm lấy mẫu MI.** Ký hiệu và lớp trạng thái lấy từ **cùng một ảnh
+chụp valuation** đã dùng để decode arm, ngay trong `speak`. Tuyệt đối
+không tính lại `state_class` sau `agent_act`: lúc đó atom có thể đã bước
+lên ô tài nguyên và ăn mất nó, và ta sẽ ghép ký hiệu với một trạng thái
+chưa từng gây ra nó.
+
+- Atom bị `metabolism` của chính bước này giết đã bị loại khỏi Vec ⇒ không
+  ghi.
+- Atom sinh ở `reproduce_and_evolve` xuất hiện lần đầu ở `speak` bước sau.
+- Vì vậy bất biến chính xác là
+  `total == Σ_bước |atom sống tại thời điểm speak|`.
+- Đếm tích luỹ toàn run và được lưu checkpoint, nên sau resume tally tiếp
+  tục liền mạch.
+
+**Ngữ nghĩa im lặng và `heard`.**
+
+- `airwave[cell] == None` gộp cả "không có atom" và "atom ở đó im lặng".
+  Receiver vẫn phân biệt được vì `occupied_d` là mệnh đề riêng:
+  `occupied_d ∧ ¬hear*` nghĩa là "láng giềng im lặng".
+- Airwave ghi **một lần** trong `speak`, rồi **đóng băng chỉ-đọc** suốt
+  phần còn lại của bước: ký hiệu vẫn nghe được ở đúng ô đã phát ra nó kể
+  cả khi người nói đã đi khỏi trong `agent_act`. Làm khác đi là mời thứ
+  tự Vec quay lại quyết định semantics.
+- Atom không bao giờ tự nghe mình: ô của chính nó không nằm trong 4 ô kề.
 
 - `airwave` là **trạng thái phái sinh**, KHÔNG lưu checkpoint (giống
   Margolus phase và block cache — xem ADR-0003 / format-spec §5).
@@ -226,6 +289,30 @@ Mở rộng phần kiểm nhất quán liên-payload đã có (commit b149ca6): 
 trong `voice` phải tồn tại trong registry; `voice.len()` phải là 0 hoặc
 `N_SYMBOLS`. Sai → `Corrupt`, không phải atom câm âm thầm.
 
+### 6.4 Nạp checkpoint slice-2 (`format_version == 1`)
+
+Luật, theo đúng thứ tự:
+
+1. `voice` vắng mặt trong CBOR → `#[serde(default)]` → `vec![]` → atom
+   **câm**. Hợp lệ với bất biến "0 hoặc `N_SYMBOLS`" ở mục 6.3.
+2. `communication/vocabulary.cbor` vắng mặt → `Vocabulary::default()`
+   (toàn 0, `total == 0`) — mong đợi ở version 1, xem mục 6.2.
+3. Kết quả: world resume **đúng và im lặng vĩnh viễn**. Mọi atom record
+   `Silent`, `total` vẫn cộng đủ, `MI == 0` — và đó là câu trả lời đúng
+   cho một thế giới không ai nói, không phải mechanism hỏng. Cha câm →
+   con câm (mục 2.3) nên nó không tự sống lại.
+4. **`load` không được cấp voice.** Cấp voice ở `load` sẽ rút RNG lúc nạp,
+   làm `load` không còn tái tạo đúng cái đã lưu và làm lệch quỹ đạo so với
+   một run liên tục — vi phạm hợp đồng resume của ADR-0006.
+5. Hồi sinh là **thao tác riêng, opt-in, gọi tường minh**:
+   `World::seed_voices(&mut self)` cấp voice ngẫu nhiên cho mọi atom đang
+   câm, rút RNG theo đúng thứ tự cố định của mục 2.3. Ai gọi thì biết mình
+   vừa đổi quỹ đạo; ghi rõ trong doc comment là hàm này **không** bảo toàn
+   bit-exactness so với run gốc.
+6. Save lại một world đã nạp từ version 1 sẽ ghi `format_version = 1_001`
+   (voice rỗng + vocabulary rỗng). Nâng cấp một chiều, không có đường quay
+   về đọc bằng reader slice-2 — đúng chính sách minor bump.
+
 ## 7. Testing
 
 Unit (`communication.rs`):
@@ -239,18 +326,33 @@ Unit (`communication.rs`):
   - bảng độc lập chính xác → 0, sai số < 1e-12.
   - luôn một ký hiệu → 0.
   - hội tụ một phần → nằm hẳn giữa 0 và log₂5.
-- `state_class`: quét N,E,S,W đúng thứ tự; không có tài nguyên → `None`.
+- `state_class` (mục 4, cả 4 luật đều có test):
+  - quét N,E,S,W đúng thứ tự; không có tài nguyên → `None`.
+  - hai ô kề đều có tài nguyên → thắng theo thứ tự, không theo giá trị
+    (ô N giá trị 2 thắng ô E giá trị 3).
+  - tài nguyên trên ô đang bị atom khác chiếm vẫn tính là tài nguyên.
+  - ô cách 2 bước có tài nguyên, 4 ô kề trống → `None` (bán kính đúng 1).
 
 Unit (`atoms.rs` / `world_loop.rs`):
 
 - deserialize atom slice-2 (không có `voice`) → câm, không panic.
 - đột biến voice giữ đúng `N_SYMBOLS` arm và không tăng độ sâu.
+- **cha câm → con câm**: atom câm đủ năng lượng sinh sản ⇒ con cũng
+  `voice.len() == 0` (mục 2.3).
+- **airwave đóng băng**: atom phát ký hiệu rồi di chuyển trong
+  `agent_act` ⇒ láng giềng của ô **cũ** vẫn nghe được ký hiệu đó trong
+  cùng bước (mục 5).
+- **thời điểm lấy mẫu**: atom kề tài nguyên phát ký hiệu rồi ăn mất tài
+  nguyên trong `agent_act` ⇒ cặp đã ghi vẫn là (ký hiệu, hướng tài nguyên
+  lúc phát), không phải `None` (mục 5).
+- **voice không đọc `hear*`**: hai world giống nhau hoàn toàn trừ airwave
+  bước trước ⇒ ký hiệu phát ra y hệt (mục 2.4).
 
 Proptest (`properties.rs`):
 
 - bất biến world của slice 2 vẫn đúng khi signaling bật.
 - `0 ≤ MI ≤ min(H(S), H(M))` với **mọi** bảng đếm sinh ngẫu nhiên.
-- `vocabulary.total == Σ (số atom sống ở mỗi bước)`.
+- `vocabulary.total == Σ_bước (số atom sống tại thời điểm `speak`)`.
 
 Integration (`crates/omiai-world/tests/communication.rs`):
 
@@ -261,7 +363,11 @@ Integration (`crates/omiai-world/tests/communication.rs`):
 Integration (`crates/omiai-checkpoint/tests/world_roundtrip.rs`):
 
 - bit-exact resume với signaling bật; so cả `vocabulary.joint`.
-- checkpoint `format_version == 1` (không có vocabulary) vẫn load được.
+- checkpoint `format_version == 1` (không có vocabulary) vẫn load được:
+  mọi atom câm, `MI == 0`, chạy thêm bước vẫn im lặng — rồi
+  `seed_voices()` làm nó nói (mục 6.4).
+- save lại world nạp từ version 1 ⇒ `format_version == 1_001` và có
+  `communication/vocabulary.cbor`.
 
 Example: `examples/communication_demo.rs` — chạy N bước, in MI, tần suất
 từng ký hiệu, dân số. Master spec yêu cầu `communication_demo`.
