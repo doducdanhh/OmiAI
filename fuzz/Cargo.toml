@@ -1,0 +1,41 @@
+[package]
+name = "omiai-fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.4", features = ["derive"] }
+omiai = { path = ".." }
+
+# Prevent this from interfering with cargo workspaces.
+[workspace]
+
+[[bin]]
+name = "tokenizer"
+path = "fuzz_targets/tokenizer.rs"
+
+[[bin]]
+name = "nlp"
+path = "fuzz_targets/nlp.rs"
+
+[[bin]]
+name = "cnf"
+path = "fuzz_targets/cnf.rs"
+
+[[bin]]
+name = "unify"
+path = "fuzz_targets/unify.rs"
+
+[[bin]]
+name = "triple"
+path = "fuzz_targets/triple.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

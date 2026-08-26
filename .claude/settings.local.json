@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Bash(grep -c \"^test .* ok$\")",
+      "Bash(git -C /home/doducdanh/IT/OmiAI status)",
+      "Bash(cargo search *)"
+    ]
+  }
+}

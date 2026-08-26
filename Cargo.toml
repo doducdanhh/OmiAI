@@ -1,0 +1,109 @@
+[package]
+name = "OmiAI"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "OmiAI: a zero-training, self-bootstrapping symbolic/neuro-symbolic reasoning system. No deep learning, no GPU, no training data."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "omiai"
+path = "src/main.rs"
+
+[lib]
+name = "omiai"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+miette = "7.0"
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+petgraph = "0.6"
+indexmap = { version = "2.0", features = ["serde"] }
+lru = "0.12"
+rayon = "1.8"
+tokio = { version = "1.0", features = ["full"] }
+crossbeam = "0.8"
+crossbeam-epoch = "0.9"
+nalgebra = "0.32"
+ndarray = { version = "0.15", features = ["rayon", "serde"] }
+num = "0.4"
+ordered-float = "4.0"
+rand = "0.8"
+rand_distr = "0.4"
+rand_chacha = "0.3"
+nom = "7.1"
+regex = "1.10"
+clap = { version = "4.0", features = ["derive"] }
+bumpalo = { version = "3.14", features = ["collections"] }
+typed-arena = "2.0"
+generational-arena = "0.2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
+quickcheck = "1.0"
+test-log = "0.2"
+arbitrary = { version = "1.4", features = ["derive"] }
+
+[[bench]]
+name = "sat"
+path = "benches/sat.rs"
+harness = false
+
+[[bench]]
+name = "cellular"
+path = "benches/cellular.rs"
+harness = false
+
+[[bench]]
+name = "reservoir"
+path = "benches/reservoir.rs"
+harness = false
+
+[[bench]]
+name = "bayesian"
+path = "benches/bayesian.rs"
+harness = false
+
+[[bench]]
+name = "cgp"
+path = "benches/cgp.rs"
+harness = false
+
+[[bench]]
+name = "knowledge"
+path = "benches/knowledge.rs"
+harness = false
+
+[[bench]]
+name = "cnf"
+path = "benches/cnf.rs"
+harness = false
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+# Note: uncomment for local-machine-only builds; disable for portable binaries.
+# target-cpu = "native" is set via RUSTFLAGS, not Cargo.toml — see README.
+
+[[example]]
+name = "logic_demo"
+path = "examples/logic_demo.rs"
+
+[[example]]
+name = "learning_demo"
+path = "examples/learning_demo.rs"
+
+[[example]]
+name = "interact"
+path = "examples/interact.rs"

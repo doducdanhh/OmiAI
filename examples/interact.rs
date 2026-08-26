@@ -1,0 +1,747 @@
+//! Interactive REPL for OmiAI.
+//!
+//! Run with: `cargo run --example interact`
+//!
+//! ## Commands
+//!
+//! | Command | What it does |
+//! |---------|--------------|
+//! | `help` | Show available commands |
+//! | `teach <sub> <rel> <obj>` | Add a triple to the knowledge graph |
+//! | `query <sub> <obj>` | Query a path through the knowledge graph |
+//! | `data <x> <y>` | Add a training point `(x, y)` for symbolic regression |
+//! | `learn [gens]` | Run CGP evolution on collected data (default 30 generations) |
+//! | `predict <x>` | Predict `y` for a given `x` using the best evolved program |
+//! | `observe <f1> <f2> <label>` | Feed an observation to the autopoietic loop |
+//! | `cycle` | Run one autopoietic cycle (FEP belief update + KG growth) |
+//! | `status` | Show current state (KG size, CGP fitness, free energy, ...) |
+//! | `loop` | Run continuous learning forever (Ctrl+C to stop) |
+//! | `save [path]` | Save state to `data/<path>.json` (default: `omiai_state.json`) |
+//! | `load <path>` | Restore state from `data/<path>.json` (replaces current) |
+//! | `saves` / `list` | List all saved state files in `data/` |
+//! | `autosave <on\|off>` | Toggle auto-save after every modifying command |
+//! | `reset` | Wipe current state (KG, data, program, autopoiesis) |
+//! | `quit` / `exit` | Exit the REPL |
+//!
+//! ## Persistence
+//!
+//! State files live under `./data/` by convention. The first time you
+//! run a modifying command, OmiAI creates that directory and the file
+//! `./data/omiai_state.json`. Subsequent runs of `cargo run --example
+//! interact` + `load omiAI_state.json` restore everything: knowledge
+//! graph, training data, the best-evolved CGP program, autopoiesis
+//! engine, history.
+//!
+//! Autosave defaults to **off**. Turn it on with `autosave on`; every
+//! `teach`, `data`, `learn`, `observe`, `cycle` then persists
+//! immediately to disk.
+//!
+//! ## Continuous learning mode
+//!
+//! Typing `loop` puts the agent in a permanent learning loop: it
+//! generates random observations from `sin(t) + noise`, feeds them to
+//! the autopoietic loop, accumulates data for CGP, and re-evolves the
+//! symbolic-regression program every 20 observations. Press Ctrl+C to
+//! stop.
+
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use omiai::evolution::fitness::mse_to_fitness;
+use omiai::evolution::genetic_programming::GeneticProgram;
+use omiai::knowledge::graph::{Concept, KnowledgeGraph};
+use omiai::meta::autopoiesis::{AutopoieticLoop, WorldState};
+use omiai::persistence::{
+    AgentState, DATA_DIR, SerializableAutopoiesis, SerializableCgpNode, SerializableCgpProgram,
+    SerializableConcept, SerializableKnowledgeGraph, SerializableMetaCognitiveEngine,
+    SerializableRelation, ensure_data_dir, list_state_files, load_state, save_state,
+};
+
+/// Persistent agent state for the REPL session.
+struct Agent {
+    kg: KnowledgeGraph,
+    autopoiesis: AutopoieticLoop,
+    data: Vec<(f64, f64)>,
+    best_program: Option<GeneticProgram>,
+    best_fitness: f64,
+    cycle_count: u64,
+    start_time: Instant,
+    autosave_enabled: bool,
+    autosave_path: PathBuf,
+}
+
+impl Agent {
+    /// Cap for the autopoiesis free-energy history when LOADING old
+    /// state files that were saved before the cap existed.
+    const MAX_FE_HISTORY_ON_LOAD: usize = 500;
+
+    fn new() -> Self {
+        let mut autopoiesis = AutopoieticLoop::new(2, 2);
+        autopoiesis.seed_concept("self", "the agent");
+        Self {
+            kg: KnowledgeGraph::new(),
+            autopoiesis,
+            data: Vec::new(),
+            best_program: None,
+            best_fitness: 0.0,
+            cycle_count: 0,
+            start_time: Instant::now(),
+            autosave_enabled: false,
+            autosave_path: PathBuf::from("omiai_state.json"),
+        }
+    }
+
+    /// Try to auto-persist if autosave is on. Silent no-op otherwise.
+    fn autosave(&self) {
+        if !self.autosave_enabled {
+            return;
+        }
+        if let Err(e) = self.save_to(&self.autosave_path) {
+            eprintln!("[autosave] warning: {e}");
+        }
+    }
+
+    /// Serialize current state into an [`AgentState`].
+    fn to_state(&self) -> AgentState {
+        // Knowledge graph (top-level)
+        let kg_concepts: Vec<SerializableConcept> = self
+            .kg
+            .concept_ids()
+            .filter_map(|id| self.kg.get(id).cloned())
+            .map(|c| SerializableConcept {
+                id: c.id,
+                label: c.label,
+            })
+            .collect();
+        let kg_relations: Vec<SerializableRelation> = self
+            .kg
+            .relations()
+            .into_iter()
+            .map(|(from, to, kind)| SerializableRelation { from, to, kind })
+            .collect();
+
+        // Autopoiesis engine
+        let engine = SerializableMetaCognitiveEngine {
+            prior_mean: self.autopoiesis.engine.model.prior_mean.clone(),
+            prior_precision: self.autopoiesis.engine.model.prior_precision.clone(),
+            likelihood_precision: self.autopoiesis.engine.model.likelihood_precision,
+        };
+
+        // Autopoiesis KG (the KG inside the loop)
+        let ap_kg_concepts: Vec<SerializableConcept> = self
+            .autopoiesis
+            .kg
+            .concept_ids()
+            .filter_map(|id| self.autopoiesis.kg.get(id).cloned())
+            .map(|c| SerializableConcept {
+                id: c.id,
+                label: c.label,
+            })
+            .collect();
+        let ap_kg_relations: Vec<SerializableRelation> = self
+            .autopoiesis
+            .kg
+            .relations()
+            .into_iter()
+            .map(|(from, to, kind)| SerializableRelation { from, to, kind })
+            .collect();
+
+        let autopoiesis = SerializableAutopoiesis {
+            latent_dim: self.autopoiesis.latent_dim,
+            feature_dim: self.autopoiesis.feature_dim,
+            engine,
+            kg: SerializableKnowledgeGraph {
+                concepts: ap_kg_concepts,
+                relations: ap_kg_relations,
+            },
+            free_energy_history: self.autopoiesis.history.clone(),
+            rounds: self.autopoiesis.rounds,
+        };
+
+        // Best CGP program
+        let best_program = self.best_program.as_ref().map(|p| SerializableCgpProgram {
+            n_inputs: p.n_inputs,
+            nodes: p
+                .nodes
+                .iter()
+                .map(|n| SerializableCgpNode {
+                    function_id: n.function_id,
+                    inputs: n.inputs.clone(),
+                })
+                .collect(),
+            outputs: p.outputs.clone(),
+        });
+
+        AgentState {
+            format_version: omiai::persistence::FORMAT_VERSION,
+            knowledge_graph: SerializableKnowledgeGraph {
+                concepts: kg_concepts,
+                relations: kg_relations,
+            },
+            autopoiesis,
+            training_data: self.data.clone(),
+            best_program,
+            best_fitness: self.best_fitness,
+            cycle_count: self.cycle_count,
+            uptime_secs: self.start_time.elapsed().as_secs(),
+        }
+    }
+
+    /// Apply a loaded [`AgentState`] in place, replacing current state.
+    fn restore_from(&mut self, s: AgentState) {
+        // Top-level KG: clear and re-add
+        self.kg = KnowledgeGraph::new();
+        for c in &s.knowledge_graph.concepts {
+            self.kg.add_concept(Concept {
+                id: c.id.clone(),
+                label: c.label.clone(),
+            });
+        }
+        for r in &s.knowledge_graph.relations {
+            let _ = self.kg.add_relation(&r.from, &r.to, r.kind.clone());
+        }
+
+        // Autopoiesis loop
+        let mut autopoiesis =
+            AutopoieticLoop::new(s.autopoiesis.latent_dim, s.autopoiesis.feature_dim);
+        autopoiesis.engine.model.prior_mean = s.autopoiesis.engine.prior_mean.clone();
+        autopoiesis.engine.model.prior_precision = s.autopoiesis.engine.prior_precision.clone();
+        autopoiesis.engine.model.likelihood_precision = s.autopoiesis.engine.likelihood_precision;
+        for c in &s.autopoiesis.kg.concepts {
+            if autopoiesis.kg.get(&c.id).is_none() {
+                autopoiesis.kg.add_concept(Concept {
+                    id: c.id.clone(),
+                    label: c.label.clone(),
+                });
+            }
+        }
+        for r in &s.autopoiesis.kg.relations {
+            let _ = autopoiesis.kg.add_relation(&r.from, &r.to, r.kind.clone());
+        }
+        autopoiesis.history = s.autopoiesis.free_energy_history.clone();
+        autopoiesis.rounds = s.autopoiesis.rounds;
+        self.autopoiesis = autopoiesis;
+
+        // Training data + counters
+        self.data = s.training_data.clone();
+        self.best_fitness = s.best_fitness;
+        self.cycle_count = s.cycle_count;
+        self.start_time = Instant::now()
+            .checked_sub(Duration::from_secs(s.uptime_secs))
+            .unwrap_or_else(Instant::now);
+
+        // Best CGP program — direct construction from saved genotype.
+        // The previous version called `GeneticProgram::random()` first
+        // and then overwrote `nodes`/`outputs`, which leaked the
+        // random RNG seed and could reference stale function IDs if
+        // the function set ever changed between save and load.
+        self.best_program = s.best_program.as_ref().map(|p| {
+            let nodes = p
+                .nodes
+                .iter()
+                .map(|n| omiai::evolution::genetic_programming::CgpNode {
+                    function_id: n.function_id,
+                    inputs: n.inputs.clone(),
+                })
+                .collect();
+            GeneticProgram {
+                n_inputs: p.n_inputs,
+                nodes,
+                outputs: p.outputs.clone(),
+            }
+        });
+    }
+
+    /// Save current state to a file (path is relative to `data/`).
+    fn save_to(&self, path: &PathBuf) -> Result<String, String> {
+        let state = self.to_state();
+        save_state(&state, path.as_path())?;
+        let summary = state.summary();
+        Ok(format!(
+            "saved to data/{} ({} concepts, {} relations, {} data points)",
+            path.display(),
+            summary.get("kg_concepts").cloned().unwrap_or_default(),
+            summary.get("kg_relations").cloned().unwrap_or_default(),
+            summary.get("training_points").cloned().unwrap_or_default(),
+        ))
+    }
+
+    /// Load state from a file, replacing current state.
+    fn load_from(&mut self, path: &PathBuf) -> Result<String, String> {
+        let state = load_state(path.as_path())?;
+        self.restore_from(state);
+        let summary = self.to_state().summary();
+        Ok(format!(
+            "loaded from data/{} ({} concepts, {} relations, {} data points, fitness {:.4})",
+            path.display(),
+            summary.get("kg_concepts").cloned().unwrap_or_default(),
+            summary.get("kg_relations").cloned().unwrap_or_default(),
+            summary.get("training_points").cloned().unwrap_or_default(),
+            self.best_fitness,
+        ))
+    }
+
+    /// Parse one input line and dispatch to the matching method.
+    ///
+    /// Returns `Err("EXIT")` for `quit` / `exit` / `q` so the REPL loop
+    /// can break. Returns `Ok("")` for empty input.
+    fn handle(&mut self, line: &str) -> Result<String, String> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(String::new());
+        }
+        let mut parts = trimmed.split_whitespace();
+        let cmd = match parts.next() {
+            Some(c) => c,
+            None => return Ok(String::new()),
+        };
+
+        match cmd {
+            "help" | "h" => Ok(self.help()),
+            "quit" | "exit" | "q" => Err("EXIT".to_string()),
+
+            "teach" => {
+                let s = parts
+                    .next()
+                    .ok_or_else(|| "usage: teach <sub> <rel> <obj>".to_string())?;
+                let r = parts
+                    .next()
+                    .ok_or_else(|| "usage: teach <sub> <rel> <obj>".to_string())?;
+                let o = parts
+                    .next()
+                    .ok_or_else(|| "usage: teach <sub> <rel> <obj>".to_string())?;
+                self.teach(s, r, o)
+            }
+
+            "query" => {
+                let s = parts
+                    .next()
+                    .ok_or_else(|| "usage: query <sub> <obj>".to_string())?;
+                let o = parts
+                    .next()
+                    .ok_or_else(|| "usage: query <sub> <obj>".to_string())?;
+                self.query(s, o)
+            }
+
+            "data" => {
+                let x: f64 = parts
+                    .next()
+                    .ok_or_else(|| "usage: data <x> <y>".to_string())?
+                    .parse()
+                    .map_err(|e: std::num::ParseFloatError| format!("bad x: {e}"))?;
+                let y: f64 = parts
+                    .next()
+                    .ok_or_else(|| "usage: data <x> <y>".to_string())?
+                    .parse()
+                    .map_err(|e: std::num::ParseFloatError| format!("bad y: {e}"))?;
+                self.data.push((x, y));
+                Ok(format!(
+                    "added ({}, {}); {} points total",
+                    x,
+                    y,
+                    self.data.len()
+                ))
+            }
+
+            "learn" => {
+                let gens: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(30);
+                self.learn(gens)
+            }
+
+            "predict" => {
+                let x: f64 = parts
+                    .next()
+                    .ok_or_else(|| "usage: predict <x>".to_string())?
+                    .parse()
+                    .map_err(|e: std::num::ParseFloatError| format!("bad x: {e}"))?;
+                self.predict(x)
+            }
+
+            "observe" => {
+                let f1: f64 = parts
+                    .next()
+                    .ok_or_else(|| "usage: observe <f1> <f2> <label>".to_string())?
+                    .parse()
+                    .map_err(|e: std::num::ParseFloatError| format!("bad f1: {e}"))?;
+                let f2: f64 = parts
+                    .next()
+                    .ok_or_else(|| "usage: observe <f1> <f2> <label>".to_string())?
+                    .parse()
+                    .map_err(|e: std::num::ParseFloatError| format!("bad f2: {e}"))?;
+                let label = parts
+                    .next()
+                    .ok_or_else(|| "usage: observe <f1> <f2> <label>".to_string())?;
+                self.observe(f1, f2, label)
+            }
+
+            "cycle" => self.cycle(),
+
+            "status" => Ok(self.status()),
+
+            "loop" => self.continuous_loop(),
+
+            "save" => {
+                let mut name = parts.next().unwrap_or("omiai_state.json").to_string();
+                if !name.ends_with(".json") {
+                    name.push_str(".json");
+                }
+                ensure_data_dir().map_err(|e| e.to_string())?;
+                // NOTE: do NOT change autosave_path — `save` is an
+                // explicit one-shot; only the `autosave` command owns
+                // the autosave target path.
+                self.save_to(&PathBuf::from(name))
+            }
+
+            "load" => {
+                let mut name = parts
+                    .next()
+                    .ok_or_else(|| "usage: load <path>".to_string())?
+                    .to_string();
+                if !name.ends_with(".json") {
+                    name.push_str(".json");
+                }
+                ensure_data_dir().map_err(|e| e.to_string())?;
+                // NOTE: do NOT change autosave_path here either.
+                self.load_from(&PathBuf::from(name))
+            }
+
+            "saves" | "list" => match list_state_files() {
+                Ok(files) if files.is_empty() => {
+                    Ok(format!("no saved state files in {} yet", DATA_DIR))
+                }
+                Ok(files) => {
+                    let names: Vec<String> = files
+                        .iter()
+                        .map(|p| {
+                            p.file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("?")
+                                .to_string()
+                        })
+                        .collect();
+                    Ok(format!(
+                        "saved state files in {}: {}",
+                        DATA_DIR,
+                        names.join(", ")
+                    ))
+                }
+                Err(e) => Err(e.to_string()),
+            },
+
+            "autosave" => {
+                let arg = parts.next().unwrap_or("");
+                match arg {
+                    "on" => {
+                        self.autosave_enabled = true;
+                        ensure_data_dir().map_err(|e| e.to_string())?;
+                        Ok(format!(
+                            "autosave ON -> data/{}",
+                            self.autosave_path.display()
+                        ))
+                    }
+                    "off" => {
+                        self.autosave_enabled = false;
+                        Ok("autosave OFF".to_string())
+                    }
+                    "status" => Ok(format!(
+                        "autosave is {}, path = data/{}",
+                        if self.autosave_enabled { "ON" } else { "OFF" },
+                        self.autosave_path.display()
+                    )),
+                    _ => Err("usage: autosave <on|off|status>".to_string()),
+                }
+            }
+
+            "reset" => {
+                *self = Self::new();
+                Ok("agent state wiped".to_string())
+            }
+
+            other => Err(format!(
+                "unknown command: '{}'. Type 'help' for the list.",
+                other
+            )),
+        }
+    }
+
+    fn help(&self) -> String {
+        let mut s = String::from(
+            "Commands:\n\
+             help                          Show this message\n\
+             teach <sub> <rel> <obj>       Add a knowledge-graph triple\n\
+             query <sub> <obj>             Query path through knowledge graph\n\
+             data <x> <y>                  Add a (x, y) training point\n\
+             learn [gens]                  Run CGP evolution (default 30 gens)\n\
+             predict <x>                   Predict y for x using best program\n\
+             observe <f1> <f2> <label>     Feed observation to autopoiesis\n\
+             cycle                         Run one autopoiesis cycle\n\
+             status                        Show current state\n\
+             loop                          Run continuous learning forever (Ctrl+C to stop)\n\
+             save [name]                   Save state to data/<name>.json (default omiai_state.json)\n\
+             load <name>                   Restore state from data/<name>.json\n\
+             saves                         List all saved state files in data/\n\
+             autosave <on|off|status>      Toggle auto-save (runs every 2s in loop)\n\
+             reset                         Wipe current state\n\
+             quit / exit                   Exit REPL\n",
+        );
+        s.push_str(&format!(
+            "\nCurrent state: {} KG nodes, {} data points, best fitness {:.4}, autosave {}",
+            self.kg.len(),
+            self.data.len(),
+            self.best_fitness,
+            if self.autosave_enabled { "ON" } else { "OFF" }
+        ));
+        s
+    }
+
+    fn teach(&mut self, sub: &str, rel: &str, obj: &str) -> Result<String, String> {
+        if self.kg.get(sub).is_none() {
+            self.kg.add_concept(Concept {
+                id: sub.to_string(),
+                label: sub.to_string(),
+            });
+        }
+        if self.kg.get(obj).is_none() {
+            self.kg.add_concept(Concept {
+                id: obj.to_string(),
+                label: obj.to_string(),
+            });
+        }
+        self.kg
+            .add_relation(sub, obj, rel)
+            .map_err(|e| e.to_string())?;
+        Ok(format!("taught: {} --{}--> {}", sub, rel, obj))
+    }
+
+    fn query(&self, sub: &str, obj: &str) -> Result<String, String> {
+        match self.kg.query_path(sub, obj) {
+            Some(path) => Ok(format!("path: {}", path.join(" → "))),
+            None => Ok(format!("no path from '{}' to '{}'", sub, obj)),
+        }
+    }
+
+    fn learn(&mut self, gens: usize) -> Result<String, String> {
+        if self.data.len() < 3 {
+            return Err(format!(
+                "need at least 3 data points; have {}",
+                self.data.len()
+            ));
+        }
+        let pts = self.data.clone();
+        let best = GeneticProgram::evolve(
+            64,
+            4,
+            gens,
+            1,
+            12,
+            1,
+            |prog| {
+                let preds: Vec<f64> = pts.iter().map(|(x, _)| prog.eval(&[*x])[0]).collect();
+                let targets: Vec<f64> = pts.iter().map(|(_, y)| *y).collect();
+                mse_to_fitness(&preds, &targets)
+            },
+            self.cycle_count,
+        );
+        let preds: Vec<f64> = self.data.iter().map(|(x, _)| best.eval(&[*x])[0]).collect();
+        let targets: Vec<f64> = self.data.iter().map(|(_, y)| *y).collect();
+        let fit = mse_to_fitness(&preds, &targets);
+        let improved = fit > self.best_fitness;
+        self.best_program = Some(best);
+        self.best_fitness = fit;
+        Ok(format!(
+            "evolved over {} gens; fitness = {:.4}{}",
+            gens,
+            fit,
+            if improved { " (NEW BEST)" } else { "" }
+        ))
+    }
+
+    fn predict(&self, x: f64) -> Result<String, String> {
+        match &self.best_program {
+            Some(p) => Ok(format!("x = {:>6.3}  →  y = {:>8.4}", x, p.eval(&[x])[0])),
+            None => Err("no program learned yet — use `data` then `learn`".to_string()),
+        }
+    }
+
+    fn observe(&mut self, f1: f64, f2: f64, label: &str) -> Result<String, String> {
+        let fe = self.autopoiesis.step(&WorldState {
+            features: vec![f1, f2],
+            label: label.to_string(),
+        });
+        self.cycle_count += 1;
+        Ok(format!(
+            "observed '{}': FE = {:.6}, KG = {} nodes, cycles = {}",
+            label,
+            fe,
+            self.autopoiesis.kg.len(),
+            self.cycle_count
+        ))
+    }
+
+    fn cycle(&mut self) -> Result<String, String> {
+        let t = (self.cycle_count as f64) * 0.1;
+        let f1 = t.sin();
+        let f2 = t.cos();
+        let label = format!("t_{}", self.cycle_count);
+        self.observe(f1, f2, &label)
+    }
+
+    fn status(&self) -> String {
+        let secs = self.start_time.elapsed().as_secs();
+        let last_fe = self.autopoiesis.last_free_energy().unwrap_or(0.0);
+        format!(
+            "--- Agent status ---\n\
+             uptime           : {}s\n\
+             KG nodes         : {}\n\
+             data points      : {}\n\
+             CGP best fitness : {:.4}\n\
+             autopoiesis last FE: {:.6}\n\
+             cycles run       : {}\n",
+            secs,
+            self.kg.len(),
+            self.data.len(),
+            self.best_fitness,
+            last_fe,
+            self.cycle_count
+        )
+    }
+
+    /// Continuous learning: generate noisy sin(t) observations, feed
+    /// them to autopoiesis, accumulate for CGP, re-evolve every 20 obs.
+    /// Runs until the user presses Ctrl+C.
+    fn continuous_loop(&mut self) -> Result<String, String> {
+        let mut t = 0.0_f64;
+        let mut next_status = Instant::now() + Duration::from_millis(500);
+        let mut next_save = Instant::now() + Duration::from_secs(5);
+        let mut obs_since_learn = 0usize;
+
+        // Caps to keep the state file bounded even after long runs.
+        const MAX_DATA_POINTS: usize = 2000;
+        const MAX_FE_HISTORY: usize = 500;
+        // 2s autosave interval balances I/O cost against data-loss
+        // window on Ctrl+C (max 2s of loop work lost if killed).
+        // Note: Rust aborts on Ctrl+C by default, so we cannot do a
+        // final save on SIGINT without the `ctrlc` crate. Periodic
+        // autosave is the protection.
+        const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(2);
+        const DATA_LABEL_STRIDE: usize = 10; // skip autopoiesis KG entries most cycles
+
+        loop {
+            // Synthetic observation: y = sin(t) + small noise, with x = t.
+            let y = t.sin() + (t.cos() * 0.03);
+            self.data.push((t, y));
+
+            // Feed the autopoietic loop only every Nth observation so its
+            // KG doesn't explode; otherwise 18k cycles = 18k concepts.
+            if (self.cycle_count % DATA_LABEL_STRIDE as u64) == 0 {
+                let f1 = t.sin();
+                let f2 = t.cos();
+                let label = format!("obs_{}", self.cycle_count);
+                self.autopoiesis.step(&WorldState {
+                    features: vec![f1, f2],
+                    label,
+                });
+                // Cap FE history length.
+                let hist_len = self.autopoiesis.history.len();
+                if hist_len > MAX_FE_HISTORY {
+                    let drop = hist_len - MAX_FE_HISTORY;
+                    self.autopoiesis.history.drain(0..drop);
+                }
+            }
+            self.cycle_count += 1;
+            obs_since_learn += 1;
+
+            // Periodically re-evolve the symbolic-regression program.
+            if obs_since_learn >= 20 && self.data.len() >= 3 {
+                let _ = self.learn(15);
+                // After learning, trim data to keep the file bounded.
+                if self.data.len() > MAX_DATA_POINTS {
+                    let drop = self.data.len() - MAX_DATA_POINTS;
+                    self.data.drain(0..drop);
+                }
+                obs_since_learn = 0;
+            }
+
+            // Status line every ~0.5s
+            if Instant::now() >= next_status {
+                let last_fe = self.autopoiesis.last_free_energy().unwrap_or(0.0);
+                print!(
+                    "\r[loop] t={:>6.2} | cycles={} | KG={} | data={} | best_fit={:.4} | last_FE={:.6}   ",
+                    t,
+                    self.cycle_count,
+                    self.autopoiesis.kg.len(),
+                    self.data.len(),
+                    self.best_fitness,
+                    last_fe
+                );
+                let _ = io::stdout().flush();
+                next_status = Instant::now() + Duration::from_millis(500);
+            }
+
+            // Periodic autosave (THIS is what was missing before).
+            if Instant::now() >= next_save && self.autosave_enabled {
+                let _ = self.save_to(&self.autosave_path.clone());
+                next_save = Instant::now() + AUTOSAVE_INTERVAL;
+            }
+
+            t += 0.05;
+            if t > 1_000_000.0 {
+                // Avoid runaway float; just keep going
+                t = t.fract();
+            }
+        }
+    }
+}
+
+fn main() {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    let mut agent = Agent::new();
+
+    println!("╔══════════════════════════════════════════════════════════╗");
+    println!("║            OmiAI Interactive REPL                        ║");
+    println!("╚══════════════════════════════════════════════════════════╝");
+    println!();
+    println!("Type 'help' for commands, 'quit' to exit, 'loop' for continuous learning.");
+    println!();
+
+    let mut prompt = "omiai> ".to_string();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            print!("{prompt}");
+            let _ = stdout.flush();
+            continue;
+        }
+
+        match agent.handle(&trimmed) {
+            Ok(msg) => {
+                if !msg.is_empty() {
+                    println!("{msg}");
+                }
+            }
+            Err(e) if e == "EXIT" => {
+                println!("Bye.");
+                return;
+            }
+            Err(e) => println!("error: {e}"),
+        }
+
+        // Persist if autosave is enabled. No-op when disabled.
+        agent.autosave();
+
+        // 'loop' takes over the prompt — don't print it again until we return.
+        if trimmed == "loop" {
+            // Continuous loop blocks until Ctrl+C; then we resume the REPL.
+            println!();
+            prompt = "omiai> ".to_string();
+        }
+        print!("{prompt}");
+        let _ = stdout.flush();
+    }
+}
