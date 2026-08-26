@@ -11,4 +11,5 @@
 
 #![allow(dead_code)]
 
+pub mod registry;
 pub mod substrate;

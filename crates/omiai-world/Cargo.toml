@@ -10,10 +10,13 @@ description = "Simulated living world: cellular-automata substrate, atoms whose 
 omiai-core = { path = "../omiai-core" }
 omiai-evolution = { path = "../omiai-evolution" }
 rayon.workspace = true
+serde.workspace = true
+generational-arena.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
+serde_json = "1.0"
 
 [[bench]]
 name = "cellular"

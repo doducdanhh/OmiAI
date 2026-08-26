@@ -37,7 +37,9 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 // ---------------------------------------------------------------------------
 
 /// An LTL formula.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum LtlFormula {
     True_,
     False_,
