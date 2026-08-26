@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use omiai_world::neuro::cellular::CellularAutomaton;
+use omiai_world::substrate::CellularAutomaton;
 
 fn bench_step(c: &mut Criterion) {
     let mut group = c.benchmark_group("CA_step");

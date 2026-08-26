@@ -233,8 +233,27 @@ fn causal_full_pipeline() {
     obs.insert("Y".into(), 10.0);
     obs.insert("Z".into(), 0.5);
     let cf = counterfactual(&scm, &obs, "X", 0.0);
-    // After intervention do(X:=0), Y should equal 0.1 + 2*0 + 1.5*Z = 0.85
-    assert!((cf["Y"] - 0.85).abs() < 1e-9, "counterfactual Y={:?}", cf);
+    // Pearl's three steps: abduction recovers the noise consistent with
+    // the observation — u_Y = 10 − (0.1 + 2·1 + 1.5·0.5) = 7.15 (the
+    // factual observation exceeds the model's 2.85 by exactly this
+    // amount). After do(X:=0), prediction carries the abduced noise:
+    //   Y′ = 0.1 + 2·0 + 1.5·0.5 + 7.15 = 8.0
+    // (An earlier expectation of 0.85 here implicitly assumed u_Y = 0,
+    // which skips abduction and contradicts the observed Y = 10.)
+    assert!((cf["Y"] - 8.0).abs() < 1e-9, "counterfactual Y={:?}", cf);
+
+    // Consistency check: with noise-free evidence (Y at its model value
+    // 2.85), abduction yields u_Y = 0 and do(X:=0) gives Y′ = 0.85.
+    let mut obs_clean = HashMap::new();
+    obs_clean.insert("X".into(), 1.0);
+    obs_clean.insert("Y".into(), 2.85);
+    obs_clean.insert("Z".into(), 0.5);
+    let cf_clean = counterfactual(&scm, &obs_clean, "X", 0.0);
+    assert!(
+        (cf_clean["Y"] - 0.85).abs() < 1e-9,
+        "counterfactual Y={:?}",
+        cf_clean
+    );
 }
 
 // ---------------------------------------------------------------------------
