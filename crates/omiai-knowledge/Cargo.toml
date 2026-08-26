@@ -1,0 +1,22 @@
+[package]
+name = "omiai-knowledge"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Knowledge graphs & ontologies: graph, reasoning, abduction, triple store, DisCoCat, SPARQL-like queries."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+serde.workspace = true
+petgraph.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "knowledge"
+harness = false

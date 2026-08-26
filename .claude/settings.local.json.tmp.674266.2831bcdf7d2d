@@ -14,7 +14,8 @@
       "Bash(python3 -)",
       "Bash(cargo build *)",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(cd *)"
+      "Bash(cd *)",
+      "Bash(git commit -m 'wip\\(workspace\\): move modules into 15-crate layout, all crates compile *)"
     ]
   }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "omiai-world"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Simulated living world: cellular-automata substrate, atoms whose genes point at logic Formulae, agents, emergent communication, central world loop."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+omiai-evolution = { path = "../omiai-evolution" }
+rayon.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "cellular"
+harness = false

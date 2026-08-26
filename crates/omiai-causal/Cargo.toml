@@ -1,0 +1,13 @@
+[package]
+name = "omiai-causal"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Causal reasoning: SCM, do-calculus, interventions, confounding, ICP, DAG utilities."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+
+[dev-dependencies]
+proptest.workspace = true

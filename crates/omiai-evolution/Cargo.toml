@@ -1,0 +1,21 @@
+[package]
+name = "omiai-evolution"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Evolutionary computation: genetic programming (CGP), crossover, mutation, selection, fitness."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+rand.workspace = true
+rand_chacha.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "cgp"
+harness = false

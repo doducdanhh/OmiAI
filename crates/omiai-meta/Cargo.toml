@@ -1,0 +1,21 @@
+[package]
+name = "omiai-meta"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Metacognition: Active Inference self-improvement loop, autopoiesis, goal systems, proof introspection."
+
+[dependencies]
+omiai-core = { path = "../omiai-core" }
+omiai-evolution = { path = "../omiai-evolution" }
+omiai-knowledge = { path = "../omiai-knowledge" }
+omiai-memory = { path = "../omiai-memory" }
+serde.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+omiai-checkpoint = { path = "../omiai-checkpoint" }
+
+omiai-neuro = { path = "../omiai-neuro" }
+proptest.workspace = true

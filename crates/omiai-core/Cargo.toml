@@ -1,0 +1,33 @@
+[package]
+name = "omiai-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Symbolic core: logic engine AST + CNF, substitution, unification, Resolution/DPLL/CDCL, CSP, prover, ASP, LTL, modal logic."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+generational-arena.workspace = true
+
+[dev-dependencies]
+omiai-world = { path = "../omiai-world" }
+
+omiai-causal = { path = "../omiai-causal" }
+omiai-evolution = { path = "../omiai-evolution" }
+omiai-knowledge = { path = "../omiai-knowledge" }
+omiai-meta = { path = "../omiai-meta" }
+omiai-neuro = { path = "../omiai-neuro" }
+omiai-probabilistic = { path = "../omiai-probabilistic" }
+
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "cnf"
+harness = false
+
+[[bench]]
+name = "sat"
+harness = false
