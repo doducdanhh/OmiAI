@@ -100,6 +100,18 @@ impl FormulaRegistry {
         }
         reg
     }
+
+    /// Xuất tất cả genome để chia sẻ (cultural transmission).
+    /// Trả về vector genome theo thứ tự slot, dùng cho serialize CBOR.
+    pub fn export_genomes(&self) -> Vec<Genome> {
+        self.genomes_in_order()
+    }
+
+    /// Nhập genome từ nguồn khác (cultural transmission).
+    /// Chèn các genome mới, trả về mapping từ slot cũ sang FormulaId mới.
+    pub fn import_genomes(&mut self, genomes: Vec<Genome>) -> Vec<FormulaId> {
+        genomes.into_iter().map(|g| self.insert(g)).collect()
+    }
 }
 
 #[cfg(test)]
@@ -181,5 +193,39 @@ mod tests {
         let id2 = reg.insert(genome(LtlFormula::atom("y")));
         assert_eq!(FormulaId::slot(id2), 1);
         assert_eq!(FormulaId::from_slot(1), id2);
+    }
+
+    #[test]
+    fn export_import_genomes_preserves_formulas() {
+        let mut reg1 = FormulaRegistry::new();
+        let f1 = reg1.insert(genome(LtlFormula::atom("a")));
+        let f2 = reg1.insert(genome(LtlFormula::and(LtlFormula::atom("b"), LtlFormula::atom("c"))));
+        let f3 = reg1.insert(genome(LtlFormula::g(LtlFormula::atom("d"))));
+
+        // Export
+        let exported = reg1.export_genomes();
+        assert_eq!(exported.len(), 3);
+
+        // Import into new registry
+        let mut reg2 = FormulaRegistry::new();
+        let imported_ids = reg2.import_genomes(exported);
+        assert_eq!(imported_ids.len(), 3);
+
+        // Formulas preserved (but slot indices may differ)
+        assert_eq!(reg2.get(imported_ids[0]).unwrap().formula, LtlFormula::atom("a"));
+        assert_eq!(reg2.get(imported_ids[1]).unwrap().formula, LtlFormula::and(LtlFormula::atom("b"), LtlFormula::atom("c")));
+        assert_eq!(reg2.get(imported_ids[2]).unwrap().formula, LtlFormula::g(LtlFormula::atom("d")));
+    }
+
+    #[test]
+    fn import_genomes_appends_to_existing() {
+        let mut reg = FormulaRegistry::new();
+        reg.insert(genome(LtlFormula::atom("original")));
+
+        let imported = reg.import_genomes(vec![genome(LtlFormula::atom("imported"))]);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(reg.len(), 2);
+        // Imported genome gets new slot (1)
+        assert_eq!(reg.get(imported[0]).unwrap().formula, LtlFormula::atom("imported"));
     }
 }

@@ -123,17 +123,22 @@ impl World {
         world
     }
 
-    /// Một bước world: 5 phase theo thứ tự cố định.
-    /// Một bước world: 6 phase theo thứ tự cố định.
+    /// Một bước world: 7 phase theo thứ tự cố định.
+    ///
+    /// Thứ tự: ca_step → metabolism → speak → agent_act → reproduce_and_evolve
+    /// → team_reward → snapshot
     ///
     /// `speak` nằm SAU `metabolism` (atom chết trong bước này không nói) và
     /// TRƯỚC `agent_act` (tín hiệu ảnh hưởng ngay hành động cùng bước).
+    /// `team_reward` chạy sau `reproduce_and_evolve` để phần thưởng tính trên
+    /// dân số sau sinh sản.
     pub fn step(&mut self) {
         self.ca_step();
         self.metabolism();
         self.speak();
         self.agent_act();
         self.reproduce_and_evolve();
+        self.team_reward();
         self.snapshot();
     }
 
@@ -170,7 +175,9 @@ impl World {
                 agents::observe_surroundings(atom.pos, width, height, &cell, &occ);
             let val = communication::neighbourhood_valuation(&obs);
             let signal = communication::decode_voice(&atom.voice, &self.registry, &val);
-            let state = communication::state_class(&obs);
+            // Pass self cell value for beacon detection
+            let self_cell = cells[atom.pos.1 * width + atom.pos.0];
+            let state = communication::state_class(&obs, self_cell);
             // Ghi MỌI atom sống, kể cả atom câm (hàng Silent) — nếu không,
             // `total` không còn là dân số và MI của thế giới câm thành NaN.
             self.vocabulary.record(signal, state);
@@ -281,7 +288,18 @@ impl World {
         self.atoms.extend(children);
     }
 
-    /// Phase 5: đóng băng bước.
+    /// Phase 6: Team reward — nếu vocabulary MI > threshold thì cộng năng lượng
+    /// cho tất cả atom còn sống. Khuyến khích hội tụ ngôn ngữ chung.
+    pub fn team_reward(&mut self) {
+        use crate::ecology::{TEAM_MI_THRESHOLD, TEAM_REWARD_ENERGY};
+        if self.vocabulary.mutual_information() >= TEAM_MI_THRESHOLD {
+            for atom in &mut self.atoms {
+                atom.energy = (atom.energy + TEAM_REWARD_ENERGY).min(crate::ecology::ENERGY_MAX);
+            }
+        }
+    }
+
+    /// Phase 7: đóng băng bước.
     pub fn snapshot(&mut self) {
         self.step_count += 1;
     }
@@ -878,6 +896,7 @@ mod tests {
             w.speak();
             w.agent_act();
             w.reproduce_and_evolve();
+            w.team_reward();
             w.snapshot();
         }
         assert_eq!(w.vocabulary.total, expected);

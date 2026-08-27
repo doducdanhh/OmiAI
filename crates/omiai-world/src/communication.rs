@@ -21,11 +21,11 @@ pub const N_SYMBOLS: usize = 4;
 /// Giá trị tín hiệu quan sát được = N_SYMBOLS ký hiệu + im lặng.
 pub const N_SIGNAL_VALUES: usize = N_SYMBOLS + 1;
 
-/// Số lớp trạng thái thế giới: 4 hướng + "không có tài nguyên kề".
-pub const N_STATE_CLASSES: usize = 5;
+/// Số lớp trạng thái thế giới: 4 hướng + "không có tài nguyên kề" + "đứng trên tài nguyên (beacon)".
+pub const N_STATE_CLASSES: usize = 6;
 
 /// Giá trị tín hiệu. **Im lặng LÀ một giá trị**, không phải dữ liệu thiếu:
-/// nếu im lặng bị bỏ khỏi bảng đếm thì trần MI bị chặn dưới log₂5 vì lý do
+/// nếu im lặng bị bỏ khỏi bảng đếm thì trần MI bị chặn dưới log₂6 vì lý do
 /// cấu trúc, và mọi phép đo đọc ra như "hội tụ thất bại" dù cơ chế đúng.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalValue {
@@ -43,7 +43,7 @@ impl SignalValue {
     }
 }
 
-/// Lớp trạng thái mà tín hiệu nói về: hướng ô tài nguyên KỀ sender.
+/// Lớp trạng thái mà tín hiệu nói về: hướng ô tài nguyên KỀ sender + beacon (đứng trên tài nguyên).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateClass {
     North,
@@ -51,10 +51,11 @@ pub enum StateClass {
     South,
     West,
     None,
+    Resource, // beacon: atom đang đứng trên ô tài nguyên
 }
 
 impl StateClass {
-    /// Cột trong bảng joint, theo đúng thứ tự khai báo N,E,S,W,None.
+    /// Cột trong bảng joint, theo đúng thứ tự khai báo N,E,S,W,None,Resource.
     pub fn col(self) -> usize {
         match self {
             StateClass::North => 0,
@@ -62,6 +63,7 @@ impl StateClass {
             StateClass::South => 2,
             StateClass::West => 3,
             StateClass::None => 4,
+            StateClass::Resource => 5,
         }
     }
 }
@@ -228,7 +230,13 @@ pub fn neighbourhood_valuation(obs_by_dir: &[(Direction, Observation)]) -> BTree
 /// Bốn luật của spec §4 đến miễn phí từ việc nhận **đúng mảng quan sát mà
 /// sender dùng để phát**: bán kính đúng 1, thắng theo thứ tự chứ không theo
 /// giá trị ô, và tài nguyên dưới chân atom khác vẫn là tài nguyên.
-pub fn state_class(obs_by_dir: &[(Direction, Observation)]) -> StateClass {
+///
+/// Nếu atom đứng trên ô tài nguyên (giá trị 2 hoặc 3) → trả về Resource (beacon).
+pub fn state_class(obs_by_dir: &[(Direction, Observation)], self_cell_value: u8) -> StateClass {
+    // Beacon: atom đang đứng trên tài nguyên
+    if self_cell_value >= 2 {
+        return StateClass::Resource;
+    }
     for (dir, obs) in obs_by_dir {
         if obs.res {
             return match dir {
@@ -282,6 +290,8 @@ mod tests {
 
     /// log₂5 — trần MI khi 5 giá trị tín hiệu song ánh với 5 lớp trạng thái.
     const LOG2_5: f64 = 2.321928094887362;
+    /// log₂6 — trần MI khi 5 giá trị tín hiệu song ánh với 6 lớp trạng thái.
+    const LOG2_6: f64 = 2.584962500721156;
 
     fn vocab_from(joint: [[u64; N_STATE_CLASSES]; N_SIGNAL_VALUES]) -> Vocabulary {
         let total = joint.iter().flatten().sum();
@@ -328,10 +338,11 @@ mod tests {
     fn exactly_independent_table_has_zero_mi() {
         // joint[s][m] = w[s] * w[m] ⇒ p(s,m) = p(s)p(m) đúng tuyệt đối.
         let w = [1u64, 2, 3, 4, 5];
+        let w_state = [1u64, 2, 3, 4, 5, 6]; // 6 state classes
         let mut joint = [[0u64; N_STATE_CLASSES]; N_SIGNAL_VALUES];
         for s in 0..N_SIGNAL_VALUES {
             for m in 0..N_STATE_CLASSES {
-                joint[s][m] = w[s] * w[m];
+                joint[s][m] = w[s] * w_state[m];
             }
         }
         let v = vocab_from(joint);
@@ -349,7 +360,7 @@ mod tests {
     fn single_symbol_says_nothing() {
         // Luôn phát Sym(0) bất kể trạng thái ⇒ H(S) = 0 ⇒ MI = 0.
         let mut joint = [[0u64; N_STATE_CLASSES]; N_SIGNAL_VALUES];
-        joint[1] = [7, 3, 11, 5, 2];
+        joint[1] = [7, 3, 11, 5, 2, 0];
         let v = vocab_from(joint);
         assert!(v.mutual_information().abs() < 1e-12);
         assert_eq!(v.entropy_signal(), 0.0);
@@ -412,17 +423,17 @@ mod tests {
     fn state_class_scans_nesw_in_order() {
         // Tài nguyên ở cả E và S → E thắng vì quét trước.
         let obs = obs4([(0, false), (2, false), (3, false), (0, false)]);
-        assert_eq!(state_class(&obs), StateClass::East);
+        assert_eq!(state_class(&obs, 0), StateClass::East);
         // Không có tài nguyên kề → None.
         let obs = obs4([(0, false), (0, false), (1, false), (0, true)]);
-        assert_eq!(state_class(&obs), StateClass::None);
+        assert_eq!(state_class(&obs, 0), StateClass::None);
     }
 
     #[test]
     fn state_class_ignores_resource_value() {
         // N giá trị 2 thắng E giá trị 3: thứ tự quyết định, không phải độ giàu.
         let obs = obs4([(2, false), (3, false), (0, false), (0, false)]);
-        assert_eq!(state_class(&obs), StateClass::North);
+        assert_eq!(state_class(&obs, 0), StateClass::North);
     }
 
     #[test]
@@ -430,7 +441,7 @@ mod tests {
         // ca_step (Margolus) đẩy được tài nguyên vào ô đang bị chiếm; ô đó
         // vẫn là tài nguyên. `res` và `occupied` là hai mệnh đề độc lập.
         let obs = obs4([(0, false), (2, true), (0, false), (0, false)]);
-        assert_eq!(state_class(&obs), StateClass::East);
+        assert_eq!(state_class(&obs, 0), StateClass::East);
         let val = neighbourhood_valuation(&obs);
         assert!(val["res_e"] && val["occupied_e"]);
     }
@@ -440,7 +451,19 @@ mod tests {
         // 4 ô kề trống ⇒ None, bất kể có gì cách hai ô: mảng quan sát chỉ
         // chứa 4 ô kề nên "xa hơn" về mặt cấu trúc không vào được.
         let obs = obs4([(0, false), (0, false), (0, false), (0, false)]);
-        assert_eq!(state_class(&obs), StateClass::None);
+        assert_eq!(state_class(&obs, 0), StateClass::None);
+    }
+
+    #[test]
+    fn state_class_beacon_on_resource() {
+        // Atom đứng trên ô tài nguyên (giá trị 2) → Resource beacon
+        let obs = obs4([(0, false), (0, false), (0, false), (0, false)]);
+        assert_eq!(state_class(&obs, 2), StateClass::Resource);
+        // Atom đứng trên ô tài nguyên giá trị 3 → Resource beacon
+        assert_eq!(state_class(&obs, 3), StateClass::Resource);
+        // Atom đứng trên ô không phải tài nguyên → None
+        assert_eq!(state_class(&obs, 0), StateClass::None);
+        assert_eq!(state_class(&obs, 1), StateClass::None);
     }
 
     #[test]
