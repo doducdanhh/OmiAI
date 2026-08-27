@@ -5,9 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ecology::{
-    ENERGY_MAX, ENERGY_PER_RESOURCE_UNIT, METABOLIC_COST, REPRODUCE_THRESHOLD,
-};
+use crate::ecology::{ENERGY_MAX, ENERGY_PER_RESOURCE_UNIT, METABOLIC_COST, REPRODUCE_THRESHOLD};
 use crate::registry::FormulaId;
 
 /// Một thực thể sống.
@@ -21,9 +19,26 @@ pub struct Atom {
     pub gene: FormulaId,
     /// Số bước đã sống.
     pub age: u64,
+    /// Gene tiếng nói: 0 arm (câm) hoặc đúng `N_SYMBOLS` arm.
+    ///
+    /// `#[serde(default)]` là hợp đồng tương thích ngược với `atoms.cbor`
+    /// của slice 2 (không có khoá này) — atom cũ hồi sinh thành câm, spec
+    /// §6.4. Bỏ attribute này = checkpoint slice 2 hết đọc được.
+    #[serde(default)]
+    pub voice: Vec<FormulaId>,
 }
 
 impl Atom {
+    /// Atom không phát được ký hiệu nào.
+    pub fn is_mute(&self) -> bool {
+        self.voice.is_empty()
+    }
+
+    /// Bất biến arity: rỗng (câm) hoặc đủ `N_SYMBOLS` arm.
+    pub fn voice_is_valid(&self) -> bool {
+        self.voice.is_empty() || self.voice.len() == crate::communication::N_SYMBOLS
+    }
+
     /// Trừ metabolic cost. Trả về `false` nếu atom chết (energy ≤ 0).
     pub fn metabolize(&mut self) -> bool {
         self.energy -= METABOLIC_COST;
@@ -93,7 +108,13 @@ mod tests {
     use super::*;
 
     fn atom_at(x: usize, y: usize, energy: f64) -> Atom {
-        Atom { pos: (x, y), energy, gene: FormulaId::from_slot(0), age: 0 }
+        Atom {
+            pos: (x, y),
+            energy,
+            gene: FormulaId::from_slot(0),
+            age: 0,
+            voice: Vec::new(),
+        }
     }
 
     #[test]
@@ -134,8 +155,12 @@ mod tests {
     fn can_split_agrees_with_split_energy() {
         // can_split là cửa kiểm không-thay-đổi-trạng-thái cho split_energy:
         // hai hàm phải luôn đồng ý, và can_split không được trừ năng lượng.
-        for energy in [0.0, REPRODUCE_THRESHOLD - 0.01, REPRODUCE_THRESHOLD, ENERGY_MAX]
-        {
+        for energy in [
+            0.0,
+            REPRODUCE_THRESHOLD - 0.01,
+            REPRODUCE_THRESHOLD,
+            ENERGY_MAX,
+        ] {
             let mut a = atom_at(0, 0, energy);
             let expected = a.can_split();
             assert_eq!(a.energy, energy, "can_split không được đổi năng lượng");
@@ -151,8 +176,7 @@ mod tests {
         assert_eq!(first_free_neighbor((2, 2), &bounds, &empty), Some((2, 1)));
 
         // N và E bị chiếm → chọn S.
-        let occ =
-            |x: usize, y: usize| (x == 2 && y == 1) || (x == 3 && y == 2);
+        let occ = |x: usize, y: usize| (x == 2 && y == 1) || (x == 3 && y == 2);
         assert_eq!(first_free_neighbor((2, 2), &bounds, &occ), Some((2, 3)));
     }
 
@@ -169,6 +193,61 @@ mod tests {
         let a = atom_at(3, 4, 0.75);
         let bytes = serde_json::to_vec(&a).unwrap();
         let back: Atom = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back, a);
+    }
+
+    #[test]
+    fn slice2_atom_cbor_deserializes_to_mute() {
+        // Bản ghi CBOR đúng hình dạng slice 2: KHÔNG có khoá `voice`.
+        // Đây là hợp đồng tương thích ngược của spec §6.4 — nếu ai đó bỏ
+        // #[serde(default)] thì checkpoint slice 2 hết đọc được, và test này
+        // là chỗ duy nhất phát hiện ra trước khi người dùng mất dữ liệu.
+        #[derive(serde::Serialize)]
+        struct Slice2Atom {
+            pos: (usize, usize),
+            energy: f64,
+            gene: FormulaId,
+            age: u64,
+        }
+        let old = Slice2Atom {
+            pos: (3, 4),
+            energy: 0.75,
+            gene: FormulaId::from_slot(0),
+            age: 9,
+        };
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&old, &mut buf).unwrap();
+
+        let back: Atom = ciborium::de::from_reader(&buf[..]).unwrap();
+        assert_eq!(back.pos, (3, 4));
+        assert_eq!(back.age, 9);
+        assert!(
+            back.voice.is_empty(),
+            "atom slice 2 phải hồi sinh thành câm"
+        );
+        assert!(back.is_mute());
+        assert!(back.voice_is_valid());
+    }
+
+    #[test]
+    fn voice_is_valid_only_for_empty_or_full_arity() {
+        let mut a = atom_at(0, 0, 0.5);
+        assert!(a.voice_is_valid()); // rỗng
+        a.voice = vec![FormulaId::from_slot(0); crate::communication::N_SYMBOLS];
+        assert!(a.voice_is_valid() && !a.is_mute());
+        a.voice = vec![FormulaId::from_slot(0); crate::communication::N_SYMBOLS - 1];
+        assert!(!a.voice_is_valid(), "arity thiếu = ký hiệu không tồn tại");
+    }
+
+    #[test]
+    fn atom_with_voice_round_trips_cbor() {
+        let mut a = atom_at(1, 2, 0.5);
+        a.voice = (0..crate::communication::N_SYMBOLS)
+            .map(|i| FormulaId::from_slot(i as u32))
+            .collect();
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&a, &mut buf).unwrap();
+        let back: Atom = ciborium::de::from_reader(&buf[..]).unwrap();
         assert_eq!(back, a);
     }
 }

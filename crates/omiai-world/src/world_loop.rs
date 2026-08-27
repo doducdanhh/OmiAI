@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use omiai_core::ltl::LtlFormula;
 use rand::Rng;
-use rand_chacha::{rand_core::SeedableRng, ChaCha8Rng};
+use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 
 use crate::agents;
 use crate::atoms::Atom;
@@ -99,6 +99,7 @@ impl World {
                     energy: 0.5,
                     gene: default_genome,
                     age: 0,
+                    voice: Vec::new(),
                 });
                 placed += 1;
             }
@@ -144,10 +145,8 @@ impl World {
             let occupied = occupied_set(&self.atoms);
             let cells = self.ca.cells.clone();
             let cell = |x: usize, y: usize| cells[y * width + x];
-            let occ =
-                |x: usize, y: usize| occupied.contains(&(x, y)) && (x, y) != pos;
-            let obs =
-                agents::observe_surroundings(pos, width, height, &cell, &occ);
+            let occ = |x: usize, y: usize| occupied.contains(&(x, y)) && (x, y) != pos;
+            let obs = agents::observe_surroundings(pos, width, height, &cell, &occ);
 
             let action = agents::decide(&formula, &obs);
             let target = agents::target_of(&self.atoms[i], action);
@@ -155,8 +154,7 @@ impl World {
                 let ti = target.1 * width + target.0;
                 let tv = self.ca.cells[ti];
                 if tv == 0 || tv >= 2 {
-                    let still_occupied =
-                        self.atoms.iter().any(|a| a.pos == target);
+                    let still_occupied = self.atoms.iter().any(|a| a.pos == target);
                     if !still_occupied {
                         self.atoms[i].pos = target;
                         if tv >= 2 {
@@ -180,14 +178,10 @@ impl World {
             if !atom.can_split() {
                 continue;
             }
-            let in_bounds =
-                |x: usize, y: usize| x < self.ca.width && y < self.ca.height;
+            let in_bounds = |x: usize, y: usize| x < self.ca.width && y < self.ca.height;
             let is_taken = |x: usize, y: usize| taken.contains(&(x, y));
-            let Some((sx, sy)) = crate::atoms::first_free_neighbor(
-                atom.pos,
-                &in_bounds,
-                &is_taken,
-            ) else {
+            let Some((sx, sy)) = crate::atoms::first_free_neighbor(atom.pos, &in_bounds, &is_taken)
+            else {
                 continue;
             };
             // Chỉ sinh lên ô giá trị 0 (YAGNI: không sinh-ăn-always).
@@ -199,8 +193,10 @@ impl World {
                     Some(g) => mutate_formula(&g.formula, &mut self.rng),
                     None => continue, // genome mất (không xảy ra ở slice này)
                 };
-                self.registry
-                    .insert(Genome { formula: mutated, fitness: None })
+                self.registry.insert(Genome {
+                    formula: mutated,
+                    fitness: None,
+                })
             } else {
                 atom.gene
             };
@@ -215,6 +211,7 @@ impl World {
                 energy: child_energy,
                 gene: child_gene,
                 age: 0,
+                voice: Vec::new(),
             });
         }
         self.atoms.extend(children);
@@ -256,9 +253,7 @@ pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula {
             let name = ATOM_NAMES[rng.gen_range(0..ATOM_NAMES.len())];
             LtlFormula::atom(name)
         }
-        LtlFormula::Not(g) => {
-            LtlFormula::Not(Box::new(mutate_formula(g, rng)))
-        }
+        LtlFormula::Not(g) => LtlFormula::Not(Box::new(mutate_formula(g, rng))),
         LtlFormula::And(a, b) | LtlFormula::Or(a, b) => {
             let (a2, b2) = (mutate_formula(a, rng), mutate_formula(b, rng));
             if rng.r#gen::<bool>() {
@@ -336,6 +331,7 @@ mod tests {
             energy: METABOLIC_COST - 0.001,
             gene: FormulaId::from_slot(0),
             age: 0,
+            voice: Vec::new(),
         });
         w.metabolism();
         assert!(w.atoms.is_empty());
@@ -354,7 +350,13 @@ mod tests {
         );
         // Atom ở (1,0), genome mặc định (res ∨ open); đặt tài nguyên bên E.
         let gene = FormulaId::from_slot(0);
-        w.atoms.push(Atom { pos: (1, 0), energy: 0.5, gene, age: 0 });
+        w.atoms.push(Atom {
+            pos: (1, 0),
+            energy: 0.5,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
         w.ca.cells[2] = 3; // (x=2, y=0) — East neighbor
         let before = w.atoms[0].energy;
 
@@ -379,8 +381,20 @@ mod tests {
         );
         let gene = FormulaId::from_slot(0);
         // Atom A (duyệt trước) ở (1,0); atom B ở (2,0) — East của A.
-        w.atoms.push(Atom { pos: (1, 0), energy: 0.5, gene, age: 0 });
-        w.atoms.push(Atom { pos: (2, 0), energy: 0.5, gene, age: 0 });
+        w.atoms.push(Atom {
+            pos: (1, 0),
+            energy: 0.5,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
+        w.atoms.push(Atom {
+            pos: (2, 0),
+            energy: 0.5,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
         // Lưới trống hoàn toàn: A muốn đi N (ưu tiên cao nhất trống).
         w.agent_act();
         // A không thể đứng yên nếu có hướng trống — kiểm tra A rời (1,0)
@@ -400,8 +414,13 @@ mod tests {
             9,
         );
         let gene = FormulaId::from_slot(0);
-        w.atoms
-            .push(Atom { pos: (1, 1), energy: REPRODUCE_THRESHOLD, gene, age: 0 });
+        w.atoms.push(Atom {
+            pos: (1, 1),
+            energy: REPRODUCE_THRESHOLD,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
         let parent_before = w.atoms[0].energy;
 
         w.reproduce_and_evolve();
@@ -429,10 +448,21 @@ mod tests {
         let gene = FormulaId::from_slot(0);
         // Chiếm cả 4 ô → không còn ô kề trống.
         for pos in [(0, 0), (1, 0), (0, 1)] {
-            w.atoms.push(Atom { pos, energy: 0.3, gene, age: 0 });
+            w.atoms.push(Atom {
+                pos,
+                energy: 0.3,
+                gene,
+                age: 0,
+                voice: Vec::new(),
+            });
         }
-        w.atoms
-            .push(Atom { pos: (1, 1), energy: REPRODUCE_THRESHOLD, gene, age: 0 });
+        w.atoms.push(Atom {
+            pos: (1, 1),
+            energy: REPRODUCE_THRESHOLD,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
         w.reproduce_and_evolve();
         assert_eq!(w.atoms.len(), 4); // không ai sinh được
         // Sinh sản thất bại KHÔNG được ăn mất năng lượng của cha.
@@ -482,9 +512,10 @@ mod tests {
         }
         // Mọi energy phải finite và trong [0, ENERGY_MAX]; ăn/sinh sản chỉ
         // chuyển giao năng lượng giữa atom và lưới, metabolism chỉ trừ.
-        assert!(w
-            .atoms
-            .iter()
-            .all(|a| a.energy.is_finite() && (0.0..=ENERGY_MAX).contains(&a.energy)));
+        assert!(
+            w.atoms
+                .iter()
+                .all(|a| a.energy.is_finite() && (0.0..=ENERGY_MAX).contains(&a.energy))
+        );
     }
 }

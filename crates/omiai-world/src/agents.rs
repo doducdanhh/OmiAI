@@ -190,9 +190,18 @@ mod tests {
         let val = valuation(&observe(0, false)); // chỉ open=true
         let open = LtlFormula::atom("open");
         let wall = LtlFormula::atom("wall");
-        assert!(eval_current(&LtlFormula::and(open.clone(), LtlFormula::True_), &val));
-        assert!(eval_current(&LtlFormula::or(open.clone(), wall.clone()), &val));
-        assert!(!eval_current(&LtlFormula::and(open.clone(), wall.clone()), &val));
+        assert!(eval_current(
+            &LtlFormula::and(open.clone(), LtlFormula::True_),
+            &val
+        ));
+        assert!(eval_current(
+            &LtlFormula::or(open.clone(), wall.clone()),
+            &val
+        ));
+        assert!(!eval_current(
+            &LtlFormula::and(open.clone(), wall.clone()),
+            &val
+        ));
         assert!(eval_current(&LtlFormula::neg(wall.clone()), &val));
         // implies(p,q) = ¬p ∨ q — không có constructor riêng trong LtlFormula.
         let implies = LtlFormula::or(LtlFormula::neg(open), LtlFormula::True_);
@@ -231,8 +240,7 @@ mod tests {
     #[test]
     fn genome_seeking_resource_moves_to_first_resource() {
         // Genome "muốn tài nguyên": res ∨ open
-        let genome =
-            LtlFormula::or(LtlFormula::atom("res"), LtlFormula::atom("open"));
+        let genome = LtlFormula::or(LtlFormula::atom("res"), LtlFormula::atom("open"));
         // N=open, E=res → N thoả trước (thứ tự ưu tiên).
         let obs = vec![
             (Direction::North, obs_open()),
@@ -243,8 +251,7 @@ mod tests {
         assert_eq!(decide(&genome, &obs), Action::Move(Direction::North));
 
         // N=cản → E=res được chọn.
-        let obs2 =
-            vec![(Direction::North, obs_wall()), (Direction::East, obs_res())];
+        let obs2 = vec![(Direction::North, obs_wall()), (Direction::East, obs_res())];
         assert_eq!(decide(&genome, &obs2), Action::Move(Direction::East));
     }
 
@@ -252,8 +259,7 @@ mod tests {
     fn blocked_cells_are_skipped_even_if_formula_matches() {
         // Genome khớp cả wall lẫn open: N thoả formula nhưng là ô cản
         // (không đi được) → bị bỏ qua; E=open được chọn.
-        let genome =
-            LtlFormula::or(LtlFormula::atom("wall"), LtlFormula::atom("open"));
+        let genome = LtlFormula::or(LtlFormula::atom("wall"), LtlFormula::atom("open"));
         let obs = vec![
             (Direction::North, obs_wall()),
             (Direction::East, obs_open()),
@@ -312,6 +318,7 @@ mod tests {
             energy: 0.5,
             gene: crate::registry::FormulaId::from_slot(0),
             age: 3,
+            voice: Vec::new(),
         };
         assert_eq!(target_of(&a, Action::Move(Direction::North)), (2, 1));
         assert_eq!(target_of(&a, Action::Stay), (2, 2));

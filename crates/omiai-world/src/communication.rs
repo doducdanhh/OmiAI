@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use omiai_core::ltl::LtlFormula;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{eval_current, Direction, Observation};
+use crate::agents::{Direction, Observation, eval_current};
 use crate::registry::{FormulaId, FormulaRegistry};
 
 /// Ký hiệu phát được: 0..N_SYMBOLS-1.
@@ -187,10 +187,22 @@ pub fn dir_suffix(dir: Direction) -> &'static str {
 /// đạt "thức ăn ở phía Đông", và thước đo MI ở mục 4 spec mất nghĩa ngay từ
 /// đầu. Đây cũng là pool đột biến của voice (spec §2.2).
 pub const VOICE_ATOM_NAMES: [&str; 16] = [
-    "open_n", "wall_n", "res_n", "occupied_n", //
-    "open_e", "wall_e", "res_e", "occupied_e", //
-    "open_s", "wall_s", "res_s", "occupied_s", //
-    "open_w", "wall_w", "res_w", "occupied_w",
+    "open_n",
+    "wall_n",
+    "res_n",
+    "occupied_n", //
+    "open_e",
+    "wall_e",
+    "res_e",
+    "occupied_e", //
+    "open_s",
+    "wall_s",
+    "res_s",
+    "occupied_s", //
+    "open_w",
+    "wall_w",
+    "res_w",
+    "occupied_w",
 ];
 
 /// Valuation 16 mệnh đề của cả vùng lân cận — miền đánh giá của voice arm.
@@ -198,9 +210,7 @@ pub const VOICE_ATOM_NAMES: [&str; 16] = [
 /// KHÔNG chứa `hear*`: voice không được phụ thuộc cái nghe được, xem spec
 /// §2.4 (mọi atom phát cùng lúc nên đọc airwave đang-ghi-dở sẽ làm ký hiệu
 /// phụ thuộc thứ tự `Vec`).
-pub fn neighbourhood_valuation(
-    obs_by_dir: &[(Direction, Observation)],
-) -> BTreeMap<String, bool> {
+pub fn neighbourhood_valuation(obs_by_dir: &[(Direction, Observation)]) -> BTreeMap<String, bool> {
     let mut val = BTreeMap::new();
     for (dir, obs) in obs_by_dir {
         let s = dir_suffix(*dir);
@@ -372,7 +382,7 @@ mod tests {
         assert_eq!(v.symbol_frequency(3), 0.0);
     }
 
-    use crate::agents::{observe, Direction};
+    use crate::agents::{Direction, observe};
     use crate::registry::Genome;
 
     /// Bốn quan sát theo thứ tự N,E,S,W từ giá trị ô + tình trạng chiếm.
@@ -446,8 +456,7 @@ mod tests {
             })
             .collect();
         // Tài nguyên ở E và S → arm 1 (res_e) là arm đầu tiên thoả.
-        let val =
-            neighbourhood_valuation(&obs4([(0, false), (2, false), (2, false), (0, false)]));
+        let val = neighbourhood_valuation(&obs4([(0, false), (2, false), (2, false), (0, false)]));
         assert_eq!(decode_voice(&arms, &reg, &val), SignalValue::Sym(1));
     }
 
@@ -462,8 +471,7 @@ mod tests {
                 })
             })
             .collect();
-        let val =
-            neighbourhood_valuation(&obs4([(0, false), (0, false), (0, false), (0, false)]));
+        let val = neighbourhood_valuation(&obs4([(0, false), (0, false), (0, false), (0, false)]));
         assert_eq!(decode_voice(&arms, &reg, &val), SignalValue::Silent);
         // Atom câm: không có arm nào ⇒ luôn im lặng.
         assert_eq!(decode_voice(&[], &reg, &val), SignalValue::Silent);
@@ -480,8 +488,10 @@ mod tests {
             printed.contains("res_n"),
             "hạt giống phải nói tên có hướng: {printed}"
         );
-        let val =
-            neighbourhood_valuation(&obs4([(2, false), (0, false), (0, false), (0, false)]));
-        assert!(crate::agents::eval_current(&f, &val), "hạt giống phải bắn được");
+        let val = neighbourhood_valuation(&obs4([(2, false), (0, false), (0, false), (0, false)]));
+        assert!(
+            crate::agents::eval_current(&f, &val),
+            "hạt giống phải bắn được"
+        );
     }
 }

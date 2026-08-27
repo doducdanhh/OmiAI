@@ -780,6 +780,7 @@ dependencies = [
 name = "omiai-world"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "criterion",
  "generational-arena",
  "omiai-core",

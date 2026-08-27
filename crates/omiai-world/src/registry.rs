@@ -107,7 +107,10 @@ mod tests {
     use super::*;
 
     fn genome(f: LtlFormula) -> Genome {
-        Genome { formula: f, fitness: None }
+        Genome {
+            formula: f,
+            fitness: None,
+        }
     }
 
     #[test]
