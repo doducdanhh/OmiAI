@@ -122,22 +122,23 @@ offset  size  field
 - Dimensions above `u16::MAX` → `CheckpointError::GridTooLarge`.
 - Load checks magic (`BadMagic`), then body length and per-cell range,
   after verifying the BLAKE3 hash from the manifest.
-- **Phase is not persistent state**: the Margolus partition phase and
-  the HashLife-style block cache are private bookkeeping in
-  `omiai-world` and reset on load. A resumed run replays determinism
-  through `rng_seed`/`rng_state_hex` plus the grid, not the phase.
+- **Margolus phase IS persistent state** (fixed in slice 2): stored in
+  header `flags` byte (bit 0). A resumed run restores exact phase so
+  Margolus partitions align with the saved step.
 
 ## 5b. `world/` — full world bundle (slice 2, implemented)
 
-`impl Checkpointable for World` (in `world_bundle.rs`) writes four files
+`impl Checkpointable for World` (in `world_bundle.rs`) writes six files
 under `world/`, each hashed into `manifest.json` as `world/<name>`:
 
 | file | content |
 |---|---|
-| `grid.bin` | §5 format (1 byte/cell body) |
+| `grid.bin` | §5 format (1 byte/cell body, phase in flags byte) |
 | `atoms.cbor` | CBOR `{step_count: u64, atoms: [{pos, energy, gene, age}]}` |
 | `registry.cbor` | CBOR `{genomes: [Genome]}` theo thứ tự slot |
 | `rng_state.bin` | 32 bytes: u64 LE seed + u64 LE stream + u128 LE word_pos |
+| `airwave.cbor` | CBOR `Vec<Option<Symbol>>` — current step's signal grid |
+| `vocabulary.cbor` | CBOR `Vocabulary {joint, total}` — accumulated MI stats |
 
 - RNG resume (ADR-0006): `ChaCha8Rng::seed_from_u64(seed)` →
   `set_stream(stream)` → `set_word_pos(word_pos)`.
