@@ -419,4 +419,103 @@ mod tests {
             (usize::MAX, 0)
         );
     }
+
+    use crate::communication::N_SYMBOLS;
+
+    #[test]
+    fn movement_pool_grows_with_symbol_count() {
+        assert_eq!(MOVEMENT_ATOM_NAMES.len(), 4 + N_SYMBOLS);
+        for k in 0..N_SYMBOLS {
+            assert!(MOVEMENT_ATOM_NAMES.contains(&format!("hear{k}").as_str()));
+        }
+    }
+
+    #[test]
+    fn hear_flags_aggregate_over_all_directions() {
+        let obs = vec![
+            (Direction::North, observe_with(0, false, Some(2))),
+            (Direction::East, observe_with(0, false, None)),
+            (Direction::South, observe_with(0, false, Some(0))),
+            (Direction::West, observe_with(0, false, Some(2))),
+        ];
+        let flags = hear_flags(&obs);
+        assert_eq!(flags, [true, false, true, false]);
+    }
+
+    #[test]
+    fn valuation_with_hear_merges_cell_and_hear_names() {
+        let obs = observe_with(2, false, Some(1));
+        let val = valuation_with_hear(&obs, &[false, true, false, false]);
+        assert_eq!(val.len(), 4 + N_SYMBOLS);
+        assert!(val["res"]);
+        assert!(val["hear1"]);
+        assert!(!val["hear0"]);
+        let val2 = valuation_with_hear(&obs, &[false; N_SYMBOLS]);
+        assert!(!val2["hear1"]);
+    }
+
+    #[test]
+    fn decide_with_hear_follows_the_signal() {
+        let formula =
+            LtlFormula::and(LtlFormula::atom("open"), LtlFormula::atom("hear2"));
+        let silent: Vec<_> = ALL_DIRECTIONS
+            .iter()
+            .map(|&d| (d, observe_with(0, false, None)))
+            .collect();
+        assert_eq!(decide_with_hear(&formula, &silent), Action::Stay);
+
+        let mut heard = silent.clone();
+        heard[3] = (Direction::West, observe_with(0, false, Some(2)));
+        assert_eq!(decide_with_hear(&formula, &heard), Action::Move(Direction::North));
+    }
+
+    #[test]
+    fn decide_ignores_hear_names_and_stays_slice2_behaviour() {
+        let formula = LtlFormula::atom("hear0");
+        let obs: Vec<_> = ALL_DIRECTIONS
+            .iter()
+            .map(|&d| (d, observe_with(0, false, Some(0))))
+            .collect();
+        assert_eq!(decide(&formula, &obs), Action::Stay);
+        assert_eq!(decide_with_hear(&formula, &obs), Action::Move(Direction::North));
+    }
+
+    #[test]
+    fn observe_surroundings_hearing_reads_neighbour_cells_only() {
+        let obs = observe_surroundings_hearing(
+            (1, 1),
+            3,
+            3,
+            &|_x, _y| 0,
+            &|_x, _y| false,
+            &|x, y| if (x, y) == (1, 1) { Some(3) } else { None },
+        );
+        assert!(obs.iter().all(|(_, o)| o.heard.is_none()), "atom tự nghe mình");
+        assert_eq!(hear_flags(&obs), [false; N_SYMBOLS]);
+
+        let obs = observe_surroundings_hearing(
+            (1, 1),
+            3,
+            3,
+            &|_x, _y| 0,
+            &|_x, _y| false,
+            &|x, y| if (x, y) == (2, 1) { Some(3) } else { None },
+        );
+        assert_eq!(obs[1].1.heard, Some(3));
+        assert_eq!(hear_flags(&obs), [false, false, false, true]);
+    }
+
+    #[test]
+    fn out_of_bounds_neighbour_hears_nothing() {
+        let obs = observe_surroundings_hearing(
+            (0, 0),
+            3,
+            3,
+            &|_x, _y| 0,
+            &|_x, _y| false,
+            &|_x, _y| Some(1),
+        );
+        assert!(obs[0].1.wall && obs[0].1.heard.is_none());
+        assert_eq!(obs[1].1.heard, Some(1));
+    }
 }
