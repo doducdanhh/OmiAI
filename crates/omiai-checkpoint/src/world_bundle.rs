@@ -14,6 +14,7 @@
 use std::path::Path;
 
 use omiai_world::atoms::Atom;
+use omiai_world::communication::Vocabulary;
 use omiai_world::registry::{FormulaRegistry, Genome};
 use omiai_world::world_loop::World;
 use rand_chacha::{rand_core::SeedableRng, ChaCha8Rng};
@@ -152,6 +153,8 @@ impl Checkpointable for World {
         let atoms_file: AtomsFile = ciborium::de::from_reader(&atoms_bytes[..])
             .map_err(de_cbor_error)?;
 
+        let n_cells = ca.width * ca.height;
+
         // registry
         let reg_path = world_dir.join(REGISTRY_FILE);
         let reg_bytes = std::fs::read(&reg_path).map_err(|source| {
@@ -208,6 +211,8 @@ impl Checkpointable for World {
             rng_seed: seed,
             rng_stream: stream,
             step_count: atoms_file.step_count,
+            airwave: vec![None; n_cells],
+            vocabulary: Vocabulary::default(),
         })
     }
 }

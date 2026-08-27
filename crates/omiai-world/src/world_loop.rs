@@ -10,6 +10,7 @@ use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 
 use crate::agents;
 use crate::atoms::Atom;
+use crate::communication::{self, Symbol, Vocabulary};
 use crate::ecology::MUTATION_PROB;
 use crate::registry::{FormulaId, FormulaRegistry, Genome};
 use crate::substrate::CellularAutomaton;
@@ -52,6 +53,16 @@ pub struct World {
     /// Stream số (mặc định 0, giữ cho tương lai; lưu checkpoint).
     pub rng_stream: u64,
     pub step_count: u64,
+    /// Kênh tín hiệu của bước hiện tại, một ô lưới một phần tử: ký hiệu vừa
+    /// được nói TẠI ô đó, `None` nếu không ai nói.
+    ///
+    /// Trạng thái PHÁI SINH: `speak` ghi một lần rồi đóng băng, mọi receiver
+    /// đọc cùng một ảnh. KHÔNG lưu checkpoint — `load` khởi tạo toàn `None`
+    /// và bước tiếp theo ghi lại đầy đủ trước khi ai đó đọc.
+    pub airwave: Vec<Option<Symbol>>,
+    /// Bảng đồng xuất hiện (ký hiệu × lớp trạng thái), tích luỹ toàn bộ
+    /// vòng đời world. Lưu checkpoint (`communication/vocabulary.cbor`).
+    pub vocabulary: Vocabulary,
 }
 
 impl World {
@@ -66,6 +77,7 @@ impl World {
         });
 
         let rng = ChaCha8Rng::seed_from_u64(seed);
+        let n_cells = config.width.saturating_mul(config.height);
         let mut world = Self {
             ca,
             registry,
@@ -74,10 +86,11 @@ impl World {
             rng_seed: seed,
             rng_stream: 0,
             step_count: 0,
+            airwave: vec![None; n_cells],
+            vocabulary: Vocabulary::default(),
         };
 
         // Rải tài nguyên: giá trị 2 hoặc 3.
-        let n_cells = config.width.saturating_mul(config.height);
         for i in 0..n_cells {
             if world.rng.r#gen::<f64>() < config.initial_resources {
                 let rich = world.rng.r#gen::<bool>();
@@ -94,12 +107,15 @@ impl World {
             }
             let (x, y) = (i % config.width, i / config.width);
             if world.ca.cells[i] == 0 && !occupied.contains(&(x, y)) {
+                // Thứ tự rút RNG là hợp đồng: rải tài nguyên xong mới tới
+                // voice, một atom một lượt, theo thứ tự đặt.
+                let voice = random_voice(&mut world.registry, &mut world.rng);
                 world.atoms.push(Atom {
                     pos: (x, y),
                     energy: 0.5,
                     gene: default_genome,
                     age: 0,
-                    voice: Vec::new(),
+                    voice,
                 });
                 placed += 1;
             }
@@ -108,9 +124,14 @@ impl World {
     }
 
     /// Một bước world: 5 phase theo thứ tự cố định.
+    /// Một bước world: 6 phase theo thứ tự cố định.
+    ///
+    /// `speak` nằm SAU `metabolism` (atom chết trong bước này không nói) và
+    /// TRƯỚC `agent_act` (tín hiệu ảnh hưởng ngay hành động cùng bước).
     pub fn step(&mut self) {
         self.ca_step();
         self.metabolism();
+        self.speak();
         self.agent_act();
         self.reproduce_and_evolve();
         self.snapshot();
@@ -126,12 +147,52 @@ impl World {
         self.atoms.retain_mut(|atom| atom.metabolize());
     }
 
-    /// Phase 3: mỗi atom quan sát → decode genome → hành động, duyệt
+    /// Phase 3: mỗi atom còn sống quan sát vùng lân cận, giải mã voice gene
+    /// thành một ký hiệu (hoặc im lặng), và ghi vào `airwave` tại ô của
+    /// chính nó. Đồng thời ghi mẫu (ký hiệu, lớp trạng thái) vào
+    /// `vocabulary` — **cùng một ảnh quan sát**, nên MI đo đúng cái sender
+    /// thấy lúc nói (spec §5).
+    ///
+    /// KHÔNG rút RNG. Buffer cục bộ rồi gán một lần: ghi trực tiếp vào
+    /// `self.airwave` sẽ cho atom sau nghe atom trước và làm ký hiệu phụ
+    /// thuộc thứ tự `Vec`.
+    pub fn speak(&mut self) {
+        let (width, height) = (self.ca.width, self.ca.height);
+        let mut airwave: Vec<Option<Symbol>> = vec![None; width * height];
+        let occupied = occupied_set(&self.atoms);
+        let cells = self.ca.cells.clone();
+
+        for atom in &self.atoms {
+            let cell = |x: usize, y: usize| cells[y * width + x];
+            let occ =
+                |x: usize, y: usize| occupied.contains(&(x, y)) && (x, y) != atom.pos;
+            let obs =
+                agents::observe_surroundings(atom.pos, width, height, &cell, &occ);
+            let val = communication::neighbourhood_valuation(&obs);
+            let signal = communication::decode_voice(&atom.voice, &self.registry, &val);
+            let state = communication::state_class(&obs);
+            // Ghi MỌI atom sống, kể cả atom câm (hàng Silent) — nếu không,
+            // `total` không còn là dân số và MI của thế giới câm thành NaN.
+            self.vocabulary.record(signal, state);
+            if let crate::communication::SignalValue::Sym(sym) = signal {
+                let idx = atom.pos.1 * width + atom.pos.0;
+                debug_assert!(airwave[idx].is_none(), "hai atom cùng ô");
+                airwave[idx] = Some(sym);
+            }
+        }
+
+        self.airwave = airwave;
+    }
+
+    /// Phase 4: mỗi atom quan sát → decode genome → hành động, duyệt
     /// theo thứ tự Vec (deterministic). Ăn tài nguyên: ô ≥ 2 → cộng
     /// năng lượng, ô về 0.
     pub fn agent_act(&mut self) {
         let width = self.ca.width;
         let height = self.ca.height;
+        // airwave đã đóng băng ở phase speak; ảnh cục bộ để closure không
+        // vay `self` trong lúc ta sửa `self.atoms`.
+        let airwave = self.airwave.clone();
         for i in 0..self.atoms.len() {
             let (pos, gene) = {
                 let atom = &self.atoms[i];
@@ -146,9 +207,12 @@ impl World {
             let cells = self.ca.cells.clone();
             let cell = |x: usize, y: usize| cells[y * width + x];
             let occ = |x: usize, y: usize| occupied.contains(&(x, y)) && (x, y) != pos;
-            let obs = agents::observe_surroundings(pos, width, height, &cell, &occ);
+            let heard = |x: usize, y: usize| airwave[y * width + x];
+            let obs = agents::observe_surroundings_hearing(
+                pos, width, height, &cell, &occ, &heard,
+            );
 
-            let action = agents::decide(&formula, &obs);
+            let action = agents::decide_with_hear(&formula, &obs);
             let target = agents::target_of(&self.atoms[i], action);
             if target != pos && target.0 < width && target.1 < height {
                 let ti = target.1 * width + target.0;
@@ -342,7 +406,8 @@ mod tests {
     fn new_world_places_atoms_on_empty_cells() {
         let w = small_world(7);
         assert_eq!(w.atoms.len(), 2);
-        assert_eq!(w.registry.len(), 1); // genome mặc định dùng chung
+        // 1 genome mặc định + 2 atom * N_SYMBOLS arm voice
+        assert_eq!(w.registry.len(), 1 + 2 * crate::communication::N_SYMBOLS);
         for a in &w.atoms {
             assert_eq!(w.ca.cells[a.pos.1 * 8 + a.pos.0], 0);
             assert_eq!(a.age, 0);
@@ -525,6 +590,8 @@ mod tests {
         assert_eq!(a.ca.cells, b.ca.cells);
         assert_eq!(a.atoms, b.atoms);
         assert_eq!(a.step_count, b.step_count);
+        assert_eq!(a.vocabulary, b.vocabulary);
+        assert_eq!(a.airwave, b.airwave);
     }
 
     #[test]
@@ -661,5 +728,188 @@ mod tests {
             }
         }
         assert!(fired > 0, "32 voice ngẫu nhiên mà không ai phát được gì ⇒ pool sai");
+    }
+
+    /// Voice quy ước hoàn hảo: arm k bắn đúng khi tài nguyên ở hướng k.
+    fn convention_voice(reg: &mut FormulaRegistry) -> Vec<FormulaId> {
+        ["res_n", "res_e", "res_s", "res_w"]
+            .iter()
+            .map(|n| {
+                reg.insert(Genome { formula: LtlFormula::atom(*n), fitness: None })
+            })
+            .collect()
+    }
+
+    fn empty_world(w: usize, h: usize, seed: u64) -> World {
+        World::new(
+            WorldConfig {
+                width: w,
+                height: h,
+                n_initial_atoms: 0,
+                initial_resources: 0.0,
+            },
+            seed,
+        )
+    }
+
+    #[test]
+    fn new_world_gives_every_seed_atom_a_full_voice() {
+        let w = small_world(7);
+        assert_eq!(w.atoms.len(), 2);
+        for a in &w.atoms {
+            assert!(a.voice_is_valid() && !a.is_mute());
+            for id in &a.voice {
+                assert!(w.registry.get(*id).is_some(), "arm phải nằm trong registry");
+            }
+        }
+        // airwave đúng kích thước lưới và trống khi chưa ai nói.
+        assert_eq!(w.airwave.len(), 8 * 8);
+        assert!(w.airwave.iter().all(|c| c.is_none()));
+        assert_eq!(w.vocabulary, Vocabulary::default());
+    }
+
+    #[test]
+    fn speak_writes_airwave_at_speaker_cell_only() {
+        let mut w = empty_world(4, 4, 5);
+        let voice = convention_voice(&mut w.registry);
+        w.atoms.push(Atom {
+            pos: (1, 1),
+            energy: 0.5,
+            gene: FormulaId::from_slot(0),
+            age: 0,
+            voice,
+        });
+        w.ca.cells[6] = 2; // tài nguyên phía Đông của (1,1) = (2,1)
+
+        w.speak();
+
+        assert_eq!(w.airwave[5], Some(1), "phải nói ký hiệu 1 = Đông");
+        assert_eq!(
+            w.airwave.iter().filter(|c| c.is_some()).count(),
+            1,
+            "chỉ ô của người nói mới có tiếng"
+        );
+        assert_eq!(w.vocabulary.total, 1);
+        assert_eq!(
+            w.vocabulary.joint[crate::communication::SignalValue::Sym(1).row()][crate::communication::StateClass::East.col()],
+            1
+        );
+    }
+
+    #[test]
+    fn speak_records_mute_atoms_as_silence() {
+        let mut w = empty_world(4, 4, 5);
+        w.atoms.push(Atom {
+            pos: (1, 1),
+            energy: 0.5,
+            gene: FormulaId::from_slot(0),
+            age: 0,
+            voice: Vec::new(),
+        });
+        w.ca.cells[6] = 2; // (1, 1) East neighbor
+
+        w.speak();
+
+        assert!(w.airwave.iter().all(|c| c.is_none()));
+        assert_eq!(w.vocabulary.total, 1, "atom câm vẫn được đếm");
+        assert_eq!(
+            w.vocabulary.joint[crate::communication::SignalValue::Silent.row()][crate::communication::StateClass::East.col()],
+            1
+        );
+        assert_eq!(w.vocabulary.mutual_information(), 0.0);
+    }
+
+    #[test]
+    fn speak_consumes_no_rng() {
+        // Hợp đồng bit-exact resume: word_pos không được nhúc nhích.
+        let mut w = small_world(13);
+        let before = w.rng.get_word_pos();
+        w.speak();
+        assert_eq!(w.rng.get_word_pos(), before, "speak rút RNG là mất bit-exact");
+    }
+
+    #[test]
+    fn speak_is_order_independent_within_a_step() {
+        // Đảo thứ tự Vec atom không được đổi airwave lẫn vocabulary. Nếu
+        // speak ghi trực tiếp vào self.airwave, atom sau sẽ nghe atom trước
+        // và test này vỡ.
+        let mut a = empty_world(5, 5, 17);
+        let voice_a = convention_voice(&mut a.registry);
+        let mut b = empty_world(5, 5, 17);
+        let voice_b = convention_voice(&mut b.registry);
+        let mk = |pos, voice: &Vec<FormulaId>| Atom {
+            pos,
+            energy: 0.5,
+            gene: FormulaId::from_slot(0),
+            age: 0,
+            voice: voice.clone(),
+        };
+        a.atoms = vec![mk((1, 1), &voice_a), mk((2, 1), &voice_a), mk((3, 1), &voice_a)];
+        b.atoms = vec![mk((3, 1), &voice_b), mk((1, 1), &voice_b), mk((2, 1), &voice_b)];
+        for w in [&mut a, &mut b] {
+            w.ca.cells[9] = 3; // (1, 1) North neighbor in 5x5 grid
+        }
+
+        a.speak();
+        b.speak();
+
+        assert_eq!(a.airwave, b.airwave);
+        assert_eq!(a.vocabulary, b.vocabulary);
+    }
+
+    #[test]
+    fn step_runs_six_phases_and_speaks() {
+        let mut w = small_world(3);
+        w.step();
+        assert_eq!(w.step_count, 1);
+        assert!(w.atoms.iter().all(|a| a.age == 1));
+        // speak đã chạy: mọi atom sống lúc speak được ghi.
+        assert!(w.vocabulary.total >= 1);
+    }
+
+    #[test]
+    fn vocabulary_total_accumulates_across_steps() {
+        let mut w = small_world(23);
+        let mut expected = 0u64;
+        for _ in 0..10 {
+            w.ca_step();
+            w.metabolism();
+            expected += w.atoms.len() as u64; // dân số ĐÚNG lúc speak
+            w.speak();
+            w.agent_act();
+            w.reproduce_and_evolve();
+            w.snapshot();
+        }
+        assert_eq!(w.vocabulary.total, expected);
+    }
+
+    #[test]
+    fn agent_act_reacts_to_heard_signal() {
+        // Atom nghe được ký hiệu 2 thì đi; không nghe thì đứng yên. Lưới
+        // trống nên khác biệt duy nhất là airwave.
+        let mut w = empty_world(5, 5, 31);
+        let gene = w.registry.insert(Genome {
+            formula: LtlFormula::and(
+                LtlFormula::atom("open"),
+                LtlFormula::atom("hear2"),
+            ),
+            fitness: None,
+        });
+        w.atoms.push(Atom {
+            pos: (2, 2),
+            energy: 0.5,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
+
+        w.airwave = vec![None; 25];
+        w.agent_act();
+        assert_eq!(w.atoms[0].pos, (2, 2), "không nghe gì thì đứng yên");
+
+        w.airwave = vec![None; 25];
+        w.airwave[2 * 5 + 1] = Some(2); // ô kề phía Tây có tiếng
+        w.agent_act();
+        assert_ne!(w.atoms[0].pos, (2, 2), "nghe được thì phải hành động");
     }
 }
