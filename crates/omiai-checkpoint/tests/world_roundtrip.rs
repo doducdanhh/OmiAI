@@ -41,6 +41,8 @@ fn world_save_load_resume_is_bit_exact() {
     assert_eq!(loaded.ca.cells, resumed.ca.cells);
     assert_eq!(loaded.atoms, resumed.atoms);
     assert_eq!(loaded.step_count, resumed.step_count);
+    assert_eq!(loaded.airwave, resumed.airwave, "airwave sai sau load");
+    assert_eq!(loaded.vocabulary, resumed.vocabulary, "vocabulary sai sau load");
     assert_eq!(
         loaded.registry.genomes_in_order(),
         resumed.registry.genomes_in_order()
@@ -55,6 +57,8 @@ fn world_save_load_resume_is_bit_exact() {
     assert_eq!(loaded.ca.cells, continuous.ca.cells, "grid sai sau resume");
     assert_eq!(loaded.atoms, continuous.atoms, "atoms sai sau resume");
     assert_eq!(loaded.step_count, continuous.step_count);
+    assert_eq!(loaded.airwave, continuous.airwave, "airwave sai sau resume");
+    assert_eq!(loaded.vocabulary, continuous.vocabulary, "vocabulary sai sau resume");
     assert_eq!(
         loaded.registry.genomes_in_order(),
         continuous.registry.genomes_in_order(),
@@ -122,6 +126,58 @@ fn out_of_bounds_atom_is_corrupt() {
 
     let err = World::load(&cp).expect_err("atom ngoài lưới phải bị từ chối");
     assert!(format!("{err}").contains("pos"), "nhận: {err}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn airwave_and_vocabulary_persist_bit_exact() {
+    let config = WorldConfig {
+        width: 8,
+        height: 8,
+        n_initial_atoms: 2,
+        initial_resources: 0.1,
+    };
+
+    let mut world = World::new(config, 42);
+    for _ in 0..5 {
+        world.step();
+    }
+
+    let root =
+        std::env::temp_dir().join(format!("omiai-airvoc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let cp = root.join("step_00000005");
+    std::fs::create_dir_all(&cp).unwrap();
+
+    world.save(&cp).expect("save world");
+    verify_dir(&cp).expect("manifest + hashes ok");
+
+    let mut loaded = World::load(&cp).expect("load world");
+
+    // Immediate equality after load
+    assert_eq!(loaded.airwave, world.airwave, "airwave sai ngay sau load");
+    assert_eq!(loaded.vocabulary, world.vocabulary, "vocabulary sai ngay sau load");
+
+    // Run both for 10 more steps
+    for _ in 0..10 {
+        world.step();
+    }
+    for _ in 0..10 {
+        loaded.step();
+    }
+
+    // Bit-exact after resume
+    assert_eq!(loaded.ca.cells, world.ca.cells, "grid sai sau resume");
+    assert_eq!(loaded.atoms, world.atoms, "atoms sai sau resume");
+    assert_eq!(loaded.step_count, world.step_count);
+    assert_eq!(loaded.airwave, world.airwave, "airwave sai sau resume");
+    assert_eq!(loaded.vocabulary, world.vocabulary, "vocabulary sai sau resume");
+    assert_eq!(
+        loaded.registry.genomes_in_order(),
+        world.registry.genomes_in_order(),
+        "registry sai sau resume"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

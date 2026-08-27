@@ -31,6 +31,8 @@ const GRID_FILE: &str = "grid.bin";
 const ATOMS_FILE: &str = "atoms.cbor";
 const REGISTRY_FILE: &str = "registry.cbor";
 const RNG_FILE: &str = "rng_state.bin";
+const AIRWAVE_FILE: &str = "airwave.cbor";
+const VOCABULARY_FILE: &str = "vocabulary.cbor";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AtomsFile {
@@ -99,9 +101,21 @@ impl Checkpointable for World {
         // 4. rng
         write_atomic(&world_dir, RNG_FILE, &encode_rng(self))?;
 
-        // 5. manifest với hash cả 4 file
-        let mut records = Vec::with_capacity(4);
-        for name in [GRID_FILE, ATOMS_FILE, REGISTRY_FILE, RNG_FILE] {
+        // 5. airwave
+        let mut airwave_buf = std::io::Cursor::new(Vec::new());
+        ciborium::ser::into_writer(&self.airwave, &mut airwave_buf)
+            .map_err(cbor_error)?;
+        write_atomic(&world_dir, AIRWAVE_FILE, airwave_buf.get_ref())?;
+
+        // 6. vocabulary
+        let mut vocab_buf = std::io::Cursor::new(Vec::new());
+        ciborium::ser::into_writer(&self.vocabulary, &mut vocab_buf)
+            .map_err(cbor_error)?;
+        write_atomic(&world_dir, VOCABULARY_FILE, vocab_buf.get_ref())?;
+
+        // 7. manifest với hash cả 6 file
+        let mut records = Vec::with_capacity(6);
+        for name in [GRID_FILE, ATOMS_FILE, REGISTRY_FILE, RNG_FILE, AIRWAVE_FILE, VOCABULARY_FILE] {
             let blake3 = hash_file(&world_dir.join(name))?;
             records.push(FileRecord {
                 path: format!("{WORLD_DIR}/{name}"),
@@ -181,6 +195,22 @@ impl Checkpointable for World {
         let word_pos =
             u128::from_le_bytes(rng_bytes[16..32].try_into().expect("16 bytes"));
 
+        // airwave
+        let airwave_path = world_dir.join(AIRWAVE_FILE);
+        let airwave_bytes = std::fs::read(&airwave_path).map_err(|source| {
+            CheckpointError::Io { path: airwave_path.clone(), source }
+        })?;
+        let airwave: Vec<Option<u8>> = ciborium::de::from_reader(&airwave_bytes[..])
+            .map_err(de_cbor_error)?;
+
+        // vocabulary
+        let vocab_path = world_dir.join(VOCABULARY_FILE);
+        let vocab_bytes = std::fs::read(&vocab_path).map_err(|source| {
+            CheckpointError::Io { path: vocab_path.clone(), source }
+        })?;
+        let vocabulary: Vocabulary = ciborium::de::from_reader(&vocab_bytes[..])
+            .map_err(de_cbor_error)?;
+
         // Nhất quán liên-payload: atom phải nằm trong lưới và gene phải trỏ
         // vào slot có thật. Nếu không kiểm ở đây, world resume "thành công"
         // rồi atom im lặng bất động (`registry.get` → None → `continue` trong
@@ -203,6 +233,15 @@ impl Checkpointable for World {
             }
         }
 
+        // Validate airwave length matches grid
+        if airwave.len() != n_cells {
+            return Err(CheckpointError::Corrupt {
+                path: airwave_path,
+                expected: format!("airwave length = {n_cells}"),
+                actual: format!("{} elements", airwave.len()),
+            });
+        }
+
         Ok(World {
             ca,
             registry: FormulaRegistry::from_genomes_in_order(registry_file.genomes),
@@ -211,8 +250,8 @@ impl Checkpointable for World {
             rng_seed: seed,
             rng_stream: stream,
             step_count: atoms_file.step_count,
-            airwave: vec![None; n_cells],
-            vocabulary: Vocabulary::default(),
+            airwave,
+            vocabulary,
         })
     }
 }

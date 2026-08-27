@@ -112,6 +112,8 @@ pub(crate) fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointErr
         debug_assert!(c < ca.num_states || c == 0);
         out.push(c);
     }
+    // Store phase in flags byte (index 15 = after magic 10 + width 2 + height 2 + num_states 1)
+    out[15] = ca.phase();
     Ok(out)
 }
 
@@ -146,5 +148,6 @@ pub(crate) fn decode_ca(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointErr
     }
     let mut ca = CellularAutomaton::new(w, h, num_states);
     ca.cells = body.to_vec();
+    ca.set_phase(bytes[15]); // flags byte stores phase in bit 0 (index 15 = magic 10 + width 2 + height 2 + num_states 1 + flags 1 = 16 bytes header? Wait: MAGIC 10 + width 2 + height 2 + num_states 1 = 15, so flags is index 15)
     Ok(ca)
 }

@@ -73,6 +73,16 @@ impl CellularAutomaton {
         }
     }
 
+    /// Get current Margolus phase (0 or 1).
+    pub fn phase(&self) -> u8 {
+        self.phase
+    }
+
+    /// Set Margolus phase (for checkpoint restore).
+    pub fn set_phase(&mut self, phase: u8) {
+        self.phase = phase & 1;
+    }
+
     /// One reversible block CA step (Margolus neighbourhood).
     ///
     /// Even phase: tiles (0,0)-(1,1), (2,0)-(3,1), …
