@@ -54,6 +54,10 @@ pub struct Observation {
     pub wall: bool,
     pub res: bool,
     pub occupied: bool,
+    /// Giá trị tín hiệu mà atom **nhận** ở ô này (airwave của neighbor).
+    /// `None` nếu không có tín hiệu — nguyên tắc spec §3.1: không báo động
+    /// nếu airwave rỗng, để valuation không tự "biết" mình đang nghe.
+    pub heard: Option<crate::communication::Symbol>,
 }
 
 /// Mã hoá giá trị ô lưới (0 trống, 1 cản, ≥2 tài nguyên) + tình trạng chiếm.
@@ -63,8 +67,16 @@ pub fn observe(cell_value: u8, occupied: bool) -> Observation {
         wall: cell_value == 1,
         res: cell_value >= 2,
         occupied,
+        heard: None,
     }
 }
+
+/// Pool tên mệnh đề của gene DI CHUYỂN + tiếng nói. Phiên bản 8 tên cho
+/// slice 3: 4 không hướng (agent_act) + 4 `hearK` (receiver thính ứng
+/// tín hiệu của neighbor phát cùng bước). Thứ tự: movement 4 + hearK.
+pub const MOVEMENT_ATOM_NAMES: [&str; 8] = [
+    "open", "wall", "res", "occupied", "hear0", "hear1", "hear2", "hear3",
+];
 
 /// Valuation propositional của một quan sát (BTreeMap — thứ tự cố định).
 pub fn valuation(obs: &Observation) -> BTreeMap<String, bool> {
@@ -76,6 +88,84 @@ pub fn valuation(obs: &Observation) -> BTreeMap<String, bool> {
     ]
     .into_iter()
     .collect()
+}
+
+/// Mã hoá giá trị ô lưới + tình trạng chiếm + tín hiệu nhận được.
+/// `observe` (2 tham số) giữ nguyên `heard = None` để slice 2 không đổi.
+pub fn observe_with(cell_value: u8, occupied: bool, heard: Option<crate::communication::Symbol>) -> Observation {
+    let mut o = observe(cell_value, occupied);
+    o.heard = heard;
+    o
+}
+
+/// Nhóm nghe của một hướng: có kênh `hearK` không tên hướng.
+fn heard_bit(sym: u8) -> &'static str {
+    ["hear0", "hear1", "hear2", "hear3"][sym as usize % crate::communication::N_SYMBOLS]
+}
+
+/// Bật cờ `hearK` cho từng ký hiệu đang được nghe trên 4 kênh.
+pub fn hear_flags(obs_by_dir: &[(Direction, Observation)]) -> [bool; crate::communication::N_SYMBOLS] {
+    let mut flags = [false; crate::communication::N_SYMBOLS];
+    for (_, obs) in obs_by_dir {
+        if let Some(sym) = obs.heard {
+            flags[sym as usize % crate::communication::N_SYMBOLS] = true;
+        }
+    }
+    flags
+}
+
+/// Valuation 8 tên cho policy di chuyển + tiếng nói: 4 không hướng từ
+/// Observation + 4 `hearK` từ cờ nghe.
+pub fn valuation_with_hear(
+    obs: &Observation,
+    hear: &[bool; crate::communication::N_SYMBOLS],
+) -> BTreeMap<String, bool> {
+    let mut v = valuation(obs);
+    for (k, &set) in hear.iter().enumerate() {
+        v.insert(heard_bit(k as u8).to_string(), set);
+    }
+    v
+}
+
+/// Chọn hành động với thông tin nghe được — cập nhật cờ hear một lần rồi
+/// đánh giá trên valuation mở rộng. Hướng đầu tiên passable + thoả sẽ được chọn.
+pub fn decide_with_hear(
+    formula: &LtlFormula,
+    obs_by_dir: &[(Direction, Observation)],
+) -> Action {
+    let hear = hear_flags(obs_by_dir);
+    for (dir, obs) in obs_by_dir {
+        let passable = !obs.wall && !obs.occupied;
+        if passable && eval_current(formula, &valuation_with_hear(obs, &hear)) {
+            return Action::Move(*dir);
+        }
+    }
+    Action::Stay
+}
+
+/// Quan sát 4 hướng có nhận thức biết. `heard(x,y)` trả về tín hiệu mà
+/// neighbor tại (x,y) đang phát (airwave của neighbor).
+pub fn observe_surroundings_hearing(
+    pos: (usize, usize),
+    width: usize,
+    height: usize,
+    cell: &dyn Fn(usize, usize) -> u8,
+    occupied: &dyn Fn(usize, usize) -> bool,
+    heard: &dyn Fn(usize, usize) -> Option<crate::communication::Symbol>,
+) -> Vec<(Direction, Observation)> {
+    ALL_DIRECTIONS
+        .iter()
+        .map(|&dir| {
+            let (dx, dy) = dir.delta();
+            let (x, y) = (pos.0 as isize + dx, pos.1 as isize + dy);
+            if x < 0 || y < 0 || x as usize >= width || y as usize >= height {
+                (dir, observe_with(1, false, None))
+            } else {
+                let (x, y) = (x as usize, y as usize);
+                (dir, observe_with(cell(x, y), occupied(x, y), heard(x, y)))
+            }
+        })
+        .collect()
 }
 
 /// Đánh giá propositional của LtlFormula trên trạng thái hiện tại.

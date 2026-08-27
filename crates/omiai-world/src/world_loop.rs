@@ -11,7 +11,7 @@ use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 use crate::agents;
 use crate::atoms::Atom;
 use crate::ecology::MUTATION_PROB;
-use crate::registry::{FormulaRegistry, Genome};
+use crate::registry::{FormulaId, FormulaRegistry, Genome};
 use crate::substrate::CellularAutomaton;
 
 /// Genome mặc định cho atom mồi: tìm tài nguyên hoặc ô trống.
@@ -243,19 +243,27 @@ fn depth(f: &LtlFormula) -> usize {
     }
 }
 
-/// Đột biến cấu trúc: chọn ngẫu nhiên một biến đổi an toàn. Các biến đổi:
-/// đổi atom thành atom khác, đảo And↔Or / Until↔Release / X↔F↔G khi đi
-/// xuống qua node đó. Không xoá cấu trúc — genome luôn còn đánh giá được.
-pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula {
-    const ATOM_NAMES: [&str; 4] = ["open", "wall", "res", "occupied"];
+/// Đột biến cấu trúc với pool tên cho trước. Các biến đổi: đổi atom thành
+/// atom khác **trong pool**, đảo And↔Or / Until↔Release / X↔F↔G khi đi xuống
+/// qua node đó. Không xoá cấu trúc — genome luôn còn đánh giá được, và độ
+/// sâu không tăng (mỗi biến đổi giữ arity).
+pub fn mutate_formula_with(
+    f: &LtlFormula,
+    rng: &mut ChaCha8Rng,
+    names: &[&str],
+) -> LtlFormula {
+    debug_assert!(!names.is_empty(), "pool tên rỗng thì không đột biến được");
     match f {
         LtlFormula::Atom(_) => {
-            let name = ATOM_NAMES[rng.gen_range(0..ATOM_NAMES.len())];
+            let name = names[rng.gen_range(0..names.len())];
             LtlFormula::atom(name)
         }
-        LtlFormula::Not(g) => LtlFormula::Not(Box::new(mutate_formula(g, rng))),
+        LtlFormula::Not(g) => LtlFormula::Not(Box::new(mutate_formula_with(g, rng, names))),
         LtlFormula::And(a, b) | LtlFormula::Or(a, b) => {
-            let (a2, b2) = (mutate_formula(a, rng), mutate_formula(b, rng));
+            let (a2, b2) = (
+                mutate_formula_with(a, rng, names),
+                mutate_formula_with(b, rng, names),
+            );
             if rng.r#gen::<bool>() {
                 LtlFormula::Or(Box::new(a2), Box::new(b2))
             } else {
@@ -263,7 +271,7 @@ pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula {
             }
         }
         LtlFormula::Next(g) | LtlFormula::Eventually(g) | LtlFormula::Globally(g) => {
-            let inner = mutate_formula(g, rng);
+            let inner = mutate_formula_with(g, rng, names);
             match rng.gen_range(0..3) {
                 0 => LtlFormula::Next(Box::new(inner)),
                 1 => LtlFormula::Eventually(Box::new(inner)),
@@ -271,8 +279,8 @@ pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula {
             }
         }
         LtlFormula::Until(p, q) | LtlFormula::Release(p, q) => {
-            let p2 = mutate_formula(p, rng);
-            let q2 = mutate_formula(q, rng);
+            let p2 = mutate_formula_with(p, rng, names);
+            let q2 = mutate_formula_with(q, rng, names);
             if rng.r#gen::<bool>() {
                 LtlFormula::Until(Box::new(p2), Box::new(q2))
             } else {
@@ -283,11 +291,40 @@ pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula {
     }
 }
 
+/// Đột biến gene DI CHUYỂN — wrapper giữ chữ ký slice 2, pool 8 tên.
+pub fn mutate_formula(f: &LtlFormula, rng: &mut ChaCha8Rng) -> LtlFormula {
+    mutate_formula_with(f, rng, &crate::agents::MOVEMENT_ATOM_NAMES)
+}
+
+/// Sinh voice ngẫu nhiên: đúng `N_SYMBOLS` arm, mỗi arm là một đột biến
+/// độc lập của hạt giống trên pool voice, chèn vào registry.
+///
+/// Thứ tự rút RNG (arm 0 → arm K-1) là hợp đồng: đổi thứ tự là đổi mọi
+/// quỹ đạo của mọi seed đã lưu.
+pub fn random_voice(
+    registry: &mut FormulaRegistry,
+    rng: &mut ChaCha8Rng,
+) -> Vec<FormulaId> {
+    let seed = crate::communication::voice_seed_formula();
+    (0..crate::communication::N_SYMBOLS)
+        .map(|_| {
+            let f = mutate_formula_with(
+                &seed,
+                rng,
+                &crate::communication::VOICE_ATOM_NAMES,
+            );
+            registry.insert(Genome { formula: f, fitness: None })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ecology::{ENERGY_MAX, METABOLIC_COST, REPRODUCE_THRESHOLD};
+    use crate::communication::{voice_seed_formula, VOICE_ATOM_NAMES};
     use crate::registry::FormulaId;
+    use crate::registry::FormulaRegistry;
 
     fn small_world(seed: u64) -> World {
         World::new(
@@ -517,5 +554,112 @@ mod tests {
                 .iter()
                 .all(|a| a.energy.is_finite() && (0.0..=ENERGY_MAX).contains(&a.energy))
         );
+    }
+
+    /// Thu mọi tên atom xuất hiện trong công thức.
+    fn atom_names(f: &LtlFormula, out: &mut Vec<String>) {
+        match f {
+            LtlFormula::Atom(n) => out.push(n.clone()),
+            LtlFormula::True_ | LtlFormula::False_ => {}
+            LtlFormula::Not(g)
+            | LtlFormula::Next(g)
+            | LtlFormula::Eventually(g)
+            | LtlFormula::Globally(g) => atom_names(g, out),
+            LtlFormula::And(a, b)
+            | LtlFormula::Or(a, b)
+            | LtlFormula::Until(a, b)
+            | LtlFormula::Release(a, b) => {
+                atom_names(a, out);
+                atom_names(b, out);
+            }
+        }
+    }
+
+    #[test]
+    fn mutate_with_pool_only_emits_pool_names() {
+        let mut rng = ChaCha8Rng::seed_from_u64(2);
+        let seed = voice_seed_formula();
+        for _ in 0..64 {
+            let m = mutate_formula_with(&seed, &mut rng, &VOICE_ATOM_NAMES);
+            let mut names = Vec::new();
+            atom_names(&m, &mut names);
+            assert!(!names.is_empty());
+            for n in names {
+                assert!(
+                    VOICE_ATOM_NAMES.contains(&n.as_str()),
+                    "đột biến voice rò tên ngoài pool: {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mutate_formula_still_uses_movement_pool() {
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let base = default_genome_formula();
+        for _ in 0..64 {
+            let m = mutate_formula(&base, &mut rng);
+            let mut names = Vec::new();
+            atom_names(&m, &mut names);
+            for n in names {
+                assert!(
+                    crate::agents::MOVEMENT_ATOM_NAMES.contains(&n.as_str()),
+                    "đột biến di chuyển rò tên ngoài pool: {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn random_voice_has_full_arity_bounded_depth_and_is_deterministic() {
+        let mut reg_a = FormulaRegistry::new();
+        let mut rng_a = ChaCha8Rng::seed_from_u64(99);
+        let voice_a = random_voice(&mut reg_a, &mut rng_a);
+
+        assert_eq!(voice_a.len(), crate::communication::N_SYMBOLS);
+        let seed_depth = depth(&voice_seed_formula());
+        for id in &voice_a {
+            let f = &reg_a.get(*id).expect("arm phải có trong registry").formula;
+            assert!(depth(f) <= seed_depth, "đột biến không được làm sâu thêm");
+        }
+
+        // Cùng seed → cùng voice (bit-exact resume phụ thuộc điều này).
+        let mut reg_b = FormulaRegistry::new();
+        let mut rng_b = ChaCha8Rng::seed_from_u64(99);
+        let voice_b = random_voice(&mut reg_b, &mut rng_b);
+        assert_eq!(voice_a, voice_b);
+        assert_eq!(reg_a.genomes_in_order(), reg_b.genomes_in_order());
+
+        // Khác seed → gần như chắc chắn khác.
+        let mut reg_c = FormulaRegistry::new();
+        let mut rng_c = ChaCha8Rng::seed_from_u64(100);
+        let _voice_c = random_voice(&mut reg_c, &mut rng_c);
+        assert_ne!(reg_a.genomes_in_order(), reg_c.genomes_in_order());
+    }
+
+    #[test]
+    fn random_voice_arms_are_decodable() {
+        // Voice sinh ngẫu nhiên phải phát được ký hiệu trên valuation thật —
+        // nếu pool sai, mọi arm false và dân số câm mà không lỗi nào nổi lên.
+        let mut reg = FormulaRegistry::new();
+        let mut rng = ChaCha8Rng::seed_from_u64(7);
+        let mut fired = 0;
+        for _ in 0..32 {
+            let voice = random_voice(&mut reg, &mut rng);
+            let obs = crate::agents::observe_surroundings(
+                (1, 1),
+                3,
+                3,
+                &|x, _y| if x == 2 { 2 } else { 0 },
+                &|_x, _y| false,
+            );
+            let val = crate::communication::neighbourhood_valuation(&obs);
+            if crate::communication::decode_voice(&voice, &reg, &val)
+                != crate::communication::SignalValue::Silent
+            {
+                fired += 1;
+            }
+        }
+        assert!(fired > 0, "32 voice ngẫu nhiên mà không ai phát được gì ⇒ pool sai");
     }
 }
