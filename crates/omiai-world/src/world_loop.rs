@@ -5,15 +5,17 @@
 use std::collections::BTreeSet;
 
 use omiai_core::ltl::LtlFormula;
+use omiai_evolution::ltl_formula_gp::{LtlFormulaGpConfig, LtlFormulaMutator};
 use rand::Rng;
 use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 
 use crate::agents;
 use crate::atoms::Atom;
-use crate::communication::{self, Symbol, Vocabulary};
+use crate::communication::{self, ConventionTracker, PromotedConvention, Symbol, Vocabulary};
 use crate::ecology::MUTATION_PROB;
 use crate::registry::{FormulaId, FormulaRegistry, Genome};
 use crate::substrate::CellularAutomaton;
+use omiai_knowledge::graph::{Concept, KnowledgeGraph};
 
 /// Genome mặc định cho atom mồi: tìm tài nguyên hoặc ô trống.
 fn default_genome_formula() -> LtlFormula {
@@ -63,6 +65,12 @@ pub struct World {
     /// Bảng đồng xuất hiện (ký hiệu × lớp trạng thái), tích luỹ toàn bộ
     /// vòng đời world. Lưu checkpoint (`communication/vocabulary.cbor`).
     pub vocabulary: Vocabulary,
+    /// Đo quy ước theo epoch và đề bạt khi đủ ổn định + có ích (slice 5).
+    /// Lưu checkpoint (`communication/conventions.cbor`).
+    pub conventions: ConventionTracker,
+    /// Tri thức biểu tượng do chính world sinh ra: mỗi quy ước được đề bạt
+    /// thành concept có tên. Lưu checkpoint (`knowledge_graph/graph.cbor`).
+    pub knowledge: KnowledgeGraph,
 }
 
 impl World {
@@ -88,6 +96,8 @@ impl World {
             step_count: 0,
             airwave: vec![None; n_cells],
             vocabulary: Vocabulary::default(),
+            conventions: ConventionTracker::default(),
+            knowledge: KnowledgeGraph::new(),
         };
 
         // Rải tài nguyên: giá trị 2 hoặc 3.
@@ -123,15 +133,17 @@ impl World {
         world
     }
 
-    /// Một bước world: 7 phase theo thứ tự cố định.
+    /// Một bước world: 8 phase theo thứ tự cố định.
     ///
     /// Thứ tự: ca_step → metabolism → speak → agent_act → reproduce_and_evolve
-    /// → team_reward → snapshot
+    /// → team_reward → promote_knowledge → snapshot
     ///
     /// `speak` nằm SAU `metabolism` (atom chết trong bước này không nói) và
     /// TRƯỚC `agent_act` (tín hiệu ảnh hưởng ngay hành động cùng bước).
     /// `team_reward` chạy sau `reproduce_and_evolve` để phần thưởng tính trên
-    /// dân số sau sinh sản.
+    /// dân số sau sinh sản. `promote_knowledge` chạy cuối cùng trước
+    /// `snapshot`: nó chỉ đọc bộ đếm của bước vừa xong, không đổi trạng thái
+    /// vật lý nào và không rút RNG.
     pub fn step(&mut self) {
         self.ca_step();
         self.metabolism();
@@ -139,6 +151,7 @@ impl World {
         self.agent_act();
         self.reproduce_and_evolve();
         self.team_reward();
+        self.promote_knowledge();
         self.snapshot();
     }
 
@@ -181,6 +194,9 @@ impl World {
             // Ghi MỌI atom sống, kể cả atom câm (hàng Silent) — nếu không,
             // `total` không còn là dân số và MI của thế giới câm thành NaN.
             self.vocabulary.record(signal, state);
+            // Cùng một mẫu vào bảng đếm CỦA EPOCH: quy ước chỉ đo được là
+            // "ổn định qua nhiều epoch" khi từng epoch có bảng riêng.
+            self.conventions.record_signal(signal, state);
             if let crate::communication::SignalValue::Sym(sym) = signal {
                 let idx = atom.pos.1 * width + atom.pos.0;
                 debug_assert!(airwave[idx].is_none(), "hai atom cùng ô");
@@ -220,7 +236,9 @@ impl World {
             );
 
             let action = agents::decide_with_hear(&formula, &obs);
+            let hear = agents::hear_flags(&obs);
             let target = agents::target_of(&self.atoms[i], action);
+            let mut fed = false;
             if target != pos && target.0 < width && target.1 < height {
                 let ti = target.1 * width + target.0;
                 let tv = self.ca.cells[ti];
@@ -231,19 +249,34 @@ impl World {
                         if tv >= 2 {
                             self.atoms[i].feed(tv);
                             self.ca.cells[ti] = 0;
+                            fed = true;
                         }
                     }
                 }
             }
+            // Bằng chứng ích lợi của epoch: atom-step này nghe gì, ăn được
+            // không. Ghi cho MỌI atom sống — kể cả atom không nghe gì, vốn
+            // là nhóm nền để so tỉ lệ (spec §3).
+            self.conventions.record_benefit(&hear, fed);
         }
     }
 
-    /// Phase 4: sinh sản qua ngưỡng + đột biến gene.
+    /// Phase 4: sinh sản qua ngưỡng + đột biến gene (sử dụng LTL Formula GP).
     pub fn reproduce_and_evolve(&mut self) {
         let mut children: Vec<Atom> = Vec::new();
         // `taken` = vị trí atom hiện hữu + vị trí con vừa đặt trong phase
         // này (tránh hai cha chọn cùng ô). Cập nhật ngay sau mỗi lần sinh.
         let mut taken = occupied_set(&self.atoms);
+
+        // Create LTL Formula GP mutator for evolution
+        let mut mutator = LtlFormulaMutator::new(
+            LtlFormulaGpConfig {
+                allowed_atoms: crate::agents::MOVEMENT_ATOM_NAMES.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            self.rng_seed + self.step_count, // deterministic seed
+        );
+
         for atom in self.atoms.iter_mut() {
             atom.age += 1;
             if !atom.can_split() {
@@ -260,17 +293,23 @@ impl World {
                 continue;
             }
             let child_gene = if self.rng.r#gen::<f64>() < MUTATION_PROB {
-                let mutated = match self.registry.get(atom.gene) {
-                    Some(g) => mutate_formula(&g.formula, &mut self.rng),
-                    None => continue, // genome mất (không xảy ra ở slice này)
-                };
+                let mut individual = omiai_evolution::ltl_formula_gp::LtlFormulaIndividual::new(
+                    self.registry.get(atom.gene).map(|g| g.formula.clone()).unwrap_or(default_genome_formula()),
+                    0, 0
+                );
+                mutator.subtree_mutation(&mut individual);
+                mutator.point_mutation(&mut individual);
+                mutator.hoisting(&mut individual);
                 self.registry.insert(Genome {
-                    formula: mutated,
+                    formula: individual.formula,
                     fitness: None,
                 })
             } else {
                 atom.gene
             };
+            // Truyền văn hoá: tiếng nói của cha sang con (slice 5). Rút RNG
+            // SAU quyết định gene và TRƯỚC split_energy — spec §2.
+            let child_voice = inherit_voice(&atom.voice, &mut self.registry, &mut self.rng);
             // Trừ năng lượng cha LÀ BƯỚC CUỐI: ô đặt con đã chắc chắn, nên
             // không có đường nào làm năng lượng biến mất mà chẳng sinh ai.
             let Some(child_energy) = atom.split_energy() else {
@@ -282,7 +321,7 @@ impl World {
                 energy: child_energy,
                 gene: child_gene,
                 age: 0,
-                voice: Vec::new(),
+                voice: child_voice,
             });
         }
         self.atoms.extend(children);
@@ -299,10 +338,64 @@ impl World {
         }
     }
 
-    /// Phase 7: đóng băng bước.
+    /// Phase 7: đóng epoch nếu tới biên, và **đề bạt** mọi quy ước vừa đủ
+    /// ổn định + có ích thành concept có tên trong `knowledge`.
+    ///
+    /// Đây là chỗ khép vòng dưới-lên ↔ trên-xuống: tín hiệu nổi sinh từ
+    /// tiến hoá trở thành tri thức biểu tượng truy vấn được. Không rút RNG
+    /// (đề bạt là hàm thuần của bảng đếm), nên resume cho đúng kết luận cũ.
+    pub fn promote_knowledge(&mut self) {
+        for convention in self.conventions.note_step() {
+            promote_into_graph(&mut self.knowledge, &convention);
+        }
+    }
+
+    /// Phase 8: đóng băng bước.
     pub fn snapshot(&mut self) {
         self.step_count += 1;
     }
+}
+
+/// Quan hệ: quy ước → ký hiệu nó dùng.
+pub const REL_SIGNALS: &str = "signals";
+/// Quan hệ: quy ước → lớp trạng thái nó nói về.
+pub const REL_MEANS: &str = "means";
+/// Quan hệ: ký hiệu → lớp trạng thái (đường tắt truy vấn "sym1 nghĩa gì").
+pub const REL_DENOTES: &str = "denotes";
+
+/// Ghi một quy ước đã đề bạt vào đồ thị tri thức.
+///
+/// Idempotent ở mức concept: `add_concept` trả `false` khi id đã có, nên
+/// gọi lại không nhân đôi node. Quan hệ chỉ được thêm khi node quy ước là
+/// **mới** — `petgraph` cho phép cạnh song song, nên thêm vô điều kiện sẽ
+/// làm `relations()` phình ra mỗi lần gọi.
+pub fn promote_into_graph(graph: &mut KnowledgeGraph, convention: &PromotedConvention) {
+    let convention_id = convention.concept_id();
+    let symbol_id = convention.symbol_concept_id();
+    let Some(meaning) = convention.meaning() else {
+        return; // meaning_col ngoài bảng: file hỏng, không dựng node rác
+    };
+    let state_id = meaning.concept_id().to_string();
+
+    graph.add_concept(Concept {
+        id: symbol_id.clone(),
+        label: format!("sym{}", convention.symbol),
+    });
+    graph.add_concept(Concept {
+        id: state_id.clone(),
+        label: meaning.label().to_string(),
+    });
+    let fresh = graph.add_concept(Concept {
+        id: convention_id.clone(),
+        label: convention.label(),
+    });
+    if !fresh {
+        return;
+    }
+    // Cả ba endpoint vừa được bảo đảm tồn tại ⇒ không nhánh nào lỗi được.
+    let _ = graph.add_relation(&convention_id, &symbol_id, REL_SIGNALS);
+    let _ = graph.add_relation(&convention_id, &state_id, REL_MEANS);
+    let _ = graph.add_relation(&symbol_id, &state_id, REL_DENOTES);
 }
 
 /// Tập vị trí đang bị chiếm (BTreeSet — thứ tự cố định).
@@ -398,6 +491,52 @@ pub fn random_voice(
             registry.insert(Genome { formula: f, fitness: None })
         })
         .collect()
+}
+
+/// Truyền văn hoá: con kế thừa từng arm voice của cha, mỗi arm đột biến
+/// độc lập với xác suất [`VOICE_MUTATION_PROB`].
+///
+/// **Cha câm → con câm, không rút RNG.** Không có đường này thì mọi test
+/// dùng atom câm đổi quỹ đạo, và "câm" trở thành một trạng thái tự khỏi.
+///
+/// Hợp đồng RNG: đúng một lần rút `f64` cho mỗi arm theo thứ tự arm 0 →
+/// arm K−1, lần rút của `mutate_formula_with` (nếu có) nằm ngay sau lần
+/// rút quyết định của arm đó. Trước slice 5 con luôn câm, nên quỹ đạo của
+/// một seed **khác** trước và sau slice này (ADR-0007).
+///
+/// [`VOICE_MUTATION_PROB`]: crate::ecology::VOICE_MUTATION_PROB
+pub fn inherit_voice(
+    parent_voice: &[FormulaId],
+    registry: &mut FormulaRegistry,
+    rng: &mut ChaCha8Rng,
+) -> Vec<FormulaId> {
+    if parent_voice.is_empty() {
+        return Vec::new();
+    }
+    let mut child = Vec::with_capacity(parent_voice.len());
+    for &id in parent_voice {
+        // Rút TRƯỚC khi tra registry: thứ tự rút không được phụ thuộc
+        // việc slot còn sống hay không.
+        let mutate = rng.r#gen::<f64>() < crate::ecology::VOICE_MUTATION_PROB;
+        let base = registry.get(id).map(|g| g.formula.clone());
+        match (mutate, base) {
+            (true, Some(f)) => {
+                let mutated = mutate_formula_with(
+                    &f,
+                    rng,
+                    &crate::communication::VOICE_ATOM_NAMES,
+                );
+                child.push(registry.insert(Genome {
+                    formula: mutated,
+                    fitness: None,
+                }));
+            }
+            // Không đột biến, hoặc slot đã mất (không xảy ra: registry
+            // không remove) → dùng lại đúng arm của cha.
+            _ => child.push(id),
+        }
+    }
+    child
 }
 
 #[cfg(test)]
@@ -876,13 +1015,15 @@ mod tests {
     }
 
     #[test]
-    fn step_runs_six_phases_and_speaks() {
+    fn step_runs_all_phases_and_speaks() {
         let mut w = small_world(3);
         w.step();
         assert_eq!(w.step_count, 1);
         assert!(w.atoms.iter().all(|a| a.age == 1));
         // speak đã chạy: mọi atom sống lúc speak được ghi.
         assert!(w.vocabulary.total >= 1);
+        // promote_knowledge đã chạy: epoch đếm được một bước.
+        assert_eq!(w.conventions.steps_in_epoch, 1);
     }
 
     #[test]
@@ -897,9 +1038,12 @@ mod tests {
             w.agent_act();
             w.reproduce_and_evolve();
             w.team_reward();
+            w.promote_knowledge();
             w.snapshot();
         }
         assert_eq!(w.vocabulary.total, expected);
+        // Bảng đếm của epoch thấy đúng cùng số mẫu (chưa tới biên epoch).
+        assert_eq!(w.conventions.epoch_vocab.total, expected);
     }
 
     #[test]
@@ -930,5 +1074,234 @@ mod tests {
         w.airwave[2 * 5 + 1] = Some(2); // ô kề phía Tây có tiếng
         w.agent_act();
         assert_ne!(w.atoms[0].pos, (2, 2), "nghe được thì phải hành động");
+    }
+
+    // ── slice 5: truyền văn hoá, ích lợi, đề bạt ──────────────────────
+
+    #[test]
+    fn child_inherits_the_parents_voice() {
+        let mut w = empty_world(4, 4, 41);
+        let voice = convention_voice(&mut w.registry);
+        w.atoms.push(Atom {
+            pos: (1, 1),
+            energy: REPRODUCE_THRESHOLD,
+            gene: FormulaId::from_slot(0),
+            age: 0,
+            voice: voice.clone(),
+        });
+
+        w.reproduce_and_evolve();
+
+        assert_eq!(w.atoms.len(), 2, "phải sinh được con");
+        let child = &w.atoms[1];
+        assert_eq!(child.voice.len(), crate::communication::N_SYMBOLS);
+        assert!(child.voice_is_valid() && !child.is_mute(), "con không được câm");
+        for id in &child.voice {
+            assert!(w.registry.get(*id).is_some(), "arm con phải có trong registry");
+        }
+        // Với VOICE_MUTATION_PROB = 0.1, phần lớn arm phải là arm của cha
+        // (đột biến hết = quy ước không sống nổi tới ngưỡng đề bạt).
+        let kept = child.voice.iter().zip(&voice).filter(|(c, p)| c == p).count();
+        assert!(kept >= 1, "con không giữ arm nào của cha: {:?}", child.voice);
+    }
+
+    #[test]
+    fn mute_parent_yields_mute_child_without_touching_the_rng() {
+        let mut w = empty_world(4, 4, 43);
+        let before = w.rng.get_word_pos();
+        let child_voice = inherit_voice(&[], &mut w.registry, &mut w.rng);
+        assert!(child_voice.is_empty(), "cha câm thì con câm");
+        assert_eq!(
+            w.rng.get_word_pos(),
+            before,
+            "nhánh cha-câm rút RNG là đổi quỹ đạo mọi test dùng atom câm"
+        );
+    }
+
+    #[test]
+    fn inherit_voice_is_deterministic_for_a_given_rng_state() {
+        let mut a = empty_world(4, 4, 47);
+        let voice_a = convention_voice(&mut a.registry);
+        let mut b = empty_world(4, 4, 47);
+        let voice_b = convention_voice(&mut b.registry);
+        let child_a = inherit_voice(&voice_a, &mut a.registry, &mut a.rng);
+        let child_b = inherit_voice(&voice_b, &mut b.registry, &mut b.rng);
+        assert_eq!(child_a, child_b);
+        assert_eq!(a.registry.genomes_in_order(), b.registry.genomes_in_order());
+        assert_eq!(a.rng.get_word_pos(), b.rng.get_word_pos());
+    }
+
+    #[test]
+    fn agent_act_records_who_heard_what_and_who_ate() {
+        // Atom nghe hear2 và ăn được → hàng nghe của ký hiệu 2 có 1 lần ăn.
+        let mut w = empty_world(5, 5, 53);
+        let gene = w.registry.insert(Genome {
+            formula: LtlFormula::and(LtlFormula::atom("res"), LtlFormula::atom("hear2")),
+            fitness: None,
+        });
+        w.atoms.push(Atom {
+            pos: (2, 2),
+            energy: 0.5,
+            gene,
+            age: 0,
+            voice: Vec::new(),
+        });
+        w.ca.cells[2 * 5 + 3] = 3; // tài nguyên phía Đông
+        w.airwave = vec![None; 25];
+        w.airwave[2 * 5 + 1] = Some(2); // phía Tây có tiếng: bật hear2
+
+        w.agent_act();
+
+        assert_eq!(w.atoms[0].pos, (3, 2), "phải đi ăn");
+        let b = &w.conventions.benefit;
+        assert_eq!(b.heard_steps[2], 1);
+        assert_eq!(b.heard_feeds[2], 1);
+        assert_eq!(b.heard_steps[0], 0);
+        assert_eq!(b.quiet_steps, 0, "atom này có nghe, không thuộc nhóm nền");
+    }
+
+    #[test]
+    fn agent_act_counts_a_deaf_step_as_baseline() {
+        let mut w = empty_world(5, 5, 59);
+        w.atoms.push(Atom {
+            pos: (2, 2),
+            energy: 0.5,
+            gene: FormulaId::from_slot(0),
+            age: 0,
+            voice: Vec::new(),
+        });
+        w.airwave = vec![None; 25]; // không ai nói
+
+        w.agent_act();
+
+        let b = &w.conventions.benefit;
+        assert_eq!(b.quiet_steps, 1);
+        assert_eq!(b.heard_steps, [0; crate::communication::N_SYMBOLS]);
+    }
+
+    /// Nạp vào tracker một epoch "sạch" cho `sym` nghĩa `state`: đủ độ đỡ,
+    /// chính xác 100%, tỉ lệ ăn khi nghe (4/8) hơn hẳn khi im ắng (1/10).
+    fn stack_clean_epoch(w: &mut World, sym: Symbol, state: crate::communication::StateClass) {
+        use crate::communication::SignalValue;
+        use crate::ecology::{MIN_BENEFIT_SUPPORT, MIN_EPOCH_SUPPORT};
+        for _ in 0..MIN_EPOCH_SUPPORT {
+            w.conventions.record_signal(SignalValue::Sym(sym), state);
+        }
+        let mut hear = [false; crate::communication::N_SYMBOLS];
+        hear[sym as usize] = true;
+        for i in 0..MIN_BENEFIT_SUPPORT {
+            w.conventions.record_benefit(&hear, i % 2 == 0);
+        }
+        for i in 0..10 {
+            w.conventions
+                .record_benefit(&[false; crate::communication::N_SYMBOLS], i == 0);
+        }
+    }
+
+    #[test]
+    fn a_stable_useful_convention_becomes_a_named_concept() {
+        use crate::communication::StateClass;
+        use crate::ecology::{EPOCH_STEPS, PROMOTION_EPOCHS};
+        let mut w = empty_world(4, 4, 61);
+        assert!(w.knowledge.is_empty(), "world mới chưa có tri thức nào");
+
+        // PROMOTION_EPOCHS − 1 epoch đầu: chưa được đề bạt gì.
+        for epoch in 1..PROMOTION_EPOCHS {
+            stack_clean_epoch(&mut w, 1, StateClass::East);
+            let newly = w.conventions.close_epoch();
+            assert!(newly.is_empty(), "epoch {epoch}: đề bạt quá sớm");
+            assert!(w.knowledge.is_empty());
+        }
+
+        // Epoch cuối đi qua ĐÚNG phase thật của world loop.
+        stack_clean_epoch(&mut w, 1, StateClass::East);
+        w.conventions.steps_in_epoch = EPOCH_STEPS - 1;
+        w.promote_knowledge();
+
+        // 3 concept: ký hiệu, lớp trạng thái, và bản thân quy ước.
+        assert_eq!(w.knowledge.len(), 3);
+        assert!(w.knowledge.get("symbol_1").is_some());
+        assert!(w.knowledge.get("state_res_east").is_some());
+        let node = w
+            .knowledge
+            .get("convention_sym1_state_res_east")
+            .expect("quy ước phải có node mang tên nó");
+        assert!(node.label.contains("precision"), "label: {}", node.label);
+
+        let mut relations = w.knowledge.relations();
+        relations.sort();
+        assert_eq!(
+            relations,
+            vec![
+                (
+                    "convention_sym1_state_res_east".to_string(),
+                    "state_res_east".to_string(),
+                    REL_MEANS.to_string()
+                ),
+                (
+                    "convention_sym1_state_res_east".to_string(),
+                    "symbol_1".to_string(),
+                    REL_SIGNALS.to_string()
+                ),
+                (
+                    "symbol_1".to_string(),
+                    "state_res_east".to_string(),
+                    REL_DENOTES.to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn promoting_the_same_convention_twice_adds_no_duplicate_edges() {
+        let convention = PromotedConvention {
+            symbol: 0,
+            meaning_col: crate::communication::StateClass::North.col() as u8,
+            epoch: 3,
+            streak: 3,
+            precision_hits: 16,
+            precision_total: 16,
+            heard_steps: 8,
+            heard_feeds: 4,
+            quiet_steps: 10,
+            quiet_feeds: 1,
+        };
+        let mut graph = KnowledgeGraph::new();
+        promote_into_graph(&mut graph, &convention);
+        let (nodes, edges) = (graph.len(), graph.relations().len());
+        promote_into_graph(&mut graph, &convention);
+        assert_eq!((graph.len(), graph.relations().len()), (nodes, edges));
+        assert_eq!(edges, 3);
+    }
+
+    #[test]
+    fn a_corrupt_meaning_column_creates_no_junk_nodes() {
+        let convention = PromotedConvention {
+            symbol: 0,
+            meaning_col: 200, // ngoài bảng: file hỏng
+            epoch: 0,
+            streak: 3,
+            precision_hits: 1,
+            precision_total: 1,
+            heard_steps: 8,
+            heard_feeds: 8,
+            quiet_steps: 0,
+            quiet_feeds: 0,
+        };
+        let mut graph = KnowledgeGraph::new();
+        promote_into_graph(&mut graph, &convention);
+        assert!(graph.is_empty(), "cột nghĩa hỏng không được dựng node rác");
+    }
+
+    #[test]
+    fn promote_knowledge_consumes_no_rng() {
+        let mut w = small_world(67);
+        let before = w.rng.get_word_pos();
+        w.promote_knowledge();
+        assert_eq!(
+            w.rng.get_word_pos(),
+            before,
+            "đề bạt rút RNG là mất bit-exact resume"
+        );
     }
 }

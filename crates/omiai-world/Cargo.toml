@@ -9,6 +9,7 @@ description = "Simulated living world: cellular-automata substrate, atoms whose 
 [dependencies]
 omiai-core = { path = "../omiai-core" }
 omiai-evolution = { path = "../omiai-evolution" }
+omiai-knowledge = { path = "../omiai-knowledge" }
 rayon.workspace = true
 serde.workspace = true
 generational-arena.workspace = true

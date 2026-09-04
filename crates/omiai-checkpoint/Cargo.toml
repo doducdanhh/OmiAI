@@ -8,6 +8,7 @@ description = "Versioned directory-format checkpoints: atomic writes, BLAKE3 man
 
 [dependencies]
 omiai-world = { path = "../omiai-world" }
+omiai-knowledge = { path = "../omiai-knowledge" }
 serde.workspace = true
 serde_json.workspace = true
 ciborium.workspace = true

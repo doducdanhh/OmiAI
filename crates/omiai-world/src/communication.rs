@@ -66,6 +66,48 @@ impl StateClass {
             StateClass::Resource => 5,
         }
     }
+
+    /// Nghịch đảo của [`col`](Self::col); `None` nếu cột ngoài bảng.
+    ///
+    /// Cần cho đường đi ngược checkpoint → tri thức: `PromotedConvention`
+    /// lưu nghĩa dưới dạng chỉ số cột (ổn định qua CBOR) chứ không lưu tên
+    /// biến thể, nên load phải dựng lại được `StateClass`.
+    pub fn from_col(col: usize) -> Option<Self> {
+        Some(match col {
+            0 => StateClass::North,
+            1 => StateClass::East,
+            2 => StateClass::South,
+            3 => StateClass::West,
+            4 => StateClass::None,
+            5 => StateClass::Resource,
+            _ => return None,
+        })
+    }
+
+    /// Id dùng làm tên concept trong `knowledge::graph` — snake_case, ổn
+    /// định (đổi id là đổi tên node đã đề bạt trong checkpoint cũ).
+    pub fn concept_id(self) -> &'static str {
+        match self {
+            StateClass::North => "state_res_north",
+            StateClass::East => "state_res_east",
+            StateClass::South => "state_res_south",
+            StateClass::West => "state_res_west",
+            StateClass::None => "state_no_resource",
+            StateClass::Resource => "state_on_resource",
+        }
+    }
+
+    /// Nhãn người đọc được của lớp trạng thái.
+    pub fn label(self) -> &'static str {
+        match self {
+            StateClass::North => "resource to the North",
+            StateClass::East => "resource to the East",
+            StateClass::South => "resource to the South",
+            StateClass::West => "resource to the West",
+            StateClass::None => "no adjacent resource",
+            StateClass::Resource => "standing on a resource",
+        }
+    }
 }
 
 /// Bảng đếm đồng thời (ký hiệu, lớp trạng thái) — tích luỹ toàn run.
@@ -170,6 +212,265 @@ impl Vocabulary {
         let row = SignalValue::Sym(sym).row();
         let count: u64 = self.joint[row].iter().sum();
         count as f64 / self.total as f64
+    }
+
+    /// Số lần ký hiệu `sym` được phát (tổng hàng) — độ đỡ của phép đo.
+    pub fn symbol_support(&self, sym: Symbol) -> u64 {
+        self.joint[SignalValue::Sym(sym).row()].iter().sum()
+    }
+
+    /// Lớp trạng thái mà `sym` hay đi kèm nhất, kèm số đếm của nó.
+    ///
+    /// Hoà thì **cột nhỏ nhất thắng** — quyết định không được phụ thuộc
+    /// thứ tự duyệt, nếu không hai lần chạy cùng bảng cho hai nghĩa khác
+    /// nhau và mọi kết luận về "quy ước ổn định" mất giá trị.
+    pub fn modal_state(&self, sym: Symbol) -> Option<(StateClass, u64)> {
+        let row = &self.joint[SignalValue::Sym(sym).row()];
+        let (col, &count) = row
+            .iter()
+            .enumerate()
+            .max_by_key(|&(col, &c)| (c, std::cmp::Reverse(col)))?;
+        if count == 0 {
+            return None;
+        }
+        StateClass::from_col(col).map(|m| (m, count))
+    }
+}
+
+/// Bộ đếm ích lợi của một epoch (spec slice-5 §3).
+///
+/// Ích lợi được đo bằng **kết quả sinh thái** (ăn được tài nguyên), không
+/// bằng tương quan ký hiệu↔trạng thái — MI đã lo phần tương quan. Một
+/// atom-step nghe hai ký hiệu cộng vào cả hai hàng, nên
+/// `Σ heard_steps ≠` dân số; đó là chủ ý, bộ đếm là *theo ký hiệu*.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BenefitCounters {
+    /// Số atom-step mà cờ `hear{s}` bật.
+    pub heard_steps: [u64; N_SYMBOLS],
+    /// Trong số đó, số lần atom ăn được tài nguyên.
+    pub heard_feeds: [u64; N_SYMBOLS],
+    /// Số atom-step không nghe ký hiệu nào.
+    pub quiet_steps: u64,
+    /// Trong số đó, số lần ăn được.
+    pub quiet_feeds: u64,
+}
+
+impl BenefitCounters {
+    /// Ghi một atom-step: nghe những gì, có ăn được không.
+    pub fn record(&mut self, hear: &[bool; N_SYMBOLS], fed: bool) {
+        let mut any = false;
+        for (s, &on) in hear.iter().enumerate() {
+            if on {
+                any = true;
+                self.heard_steps[s] += 1;
+                if fed {
+                    self.heard_feeds[s] += 1;
+                }
+            }
+        }
+        if !any {
+            self.quiet_steps += 1;
+            if fed {
+                self.quiet_feeds += 1;
+            }
+        }
+    }
+
+    /// Ký hiệu `sym` có ích trong epoch này chưa: tỉ lệ ăn khi nghe `sym`
+    /// ≥ tỉ lệ ăn khi im ắng, so bằng nhân chéo `u128` (không float ⇒
+    /// cùng bảng đếm luôn cho cùng quyết định trên mọi máy).
+    ///
+    /// Không có nền so sánh (`quiet_steps == 0`) thì chỉ đạt khi thật sự
+    /// đã ăn được lần nào lúc nghe.
+    pub fn benefits(&self, sym: Symbol) -> bool {
+        let s = sym as usize;
+        if s >= N_SYMBOLS || self.heard_steps[s] < crate::ecology::MIN_BENEFIT_SUPPORT {
+            return false;
+        }
+        if self.quiet_steps == 0 {
+            return self.heard_feeds[s] > 0;
+        }
+        u128::from(self.heard_feeds[s]) * u128::from(self.quiet_steps)
+            >= u128::from(self.quiet_feeds) * u128::from(self.heard_steps[s])
+    }
+}
+
+/// Theo dõi quy ước theo **epoch** và đề bạt khi đủ ổn định (spec §4).
+///
+/// Không rút RNG ở bất kỳ đường nào: đề bạt là hàm thuần của bảng đếm,
+/// nên resume từ checkpoint cho đúng cùng kết luận.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ConventionTracker {
+    /// Số epoch đã đóng.
+    pub epoch_index: u64,
+    /// Số bước đã đi trong epoch hiện tại.
+    pub steps_in_epoch: u64,
+    /// Bảng đếm CỦA RIÊNG epoch hiện tại — khác `World::vocabulary` (tích
+    /// luỹ toàn run). Quy ước "ổn định qua nhiều epoch" chỉ đo được khi
+    /// từng epoch được đo riêng.
+    pub epoch_vocab: Vocabulary,
+    pub benefit: BenefitCounters,
+    /// Nghĩa đang giữ streak cho từng ký hiệu (chỉ số cột), `None` = đứt.
+    pub streak_meaning: [Option<u8>; N_SYMBOLS],
+    /// Số epoch liên tiếp nghĩa tương ứng trụ được.
+    pub streak_len: [u32; N_SYMBOLS],
+    /// Các quy ước đã đề bạt, theo thứ tự đề bạt.
+    pub promoted: Vec<PromotedConvention>,
+}
+
+impl ConventionTracker {
+    /// Ghi một mẫu (tín hiệu, trạng thái) vào epoch hiện tại.
+    pub fn record_signal(&mut self, signal: SignalValue, state: StateClass) {
+        self.epoch_vocab.record(signal, state);
+    }
+
+    /// Ghi một atom-step vào bộ đếm ích lợi của epoch hiện tại.
+    pub fn record_benefit(&mut self, hear: &[bool; N_SYMBOLS], fed: bool) {
+        self.benefit.record(hear, fed);
+    }
+
+    /// Ứng viên của epoch hiện tại cho ký hiệu `sym`: đủ độ đỡ, đủ độ
+    /// chính xác, và có ích. Trả `None` nếu thiếu bất kỳ điều kiện nào.
+    pub fn candidate(&self, sym: Symbol) -> Option<(StateClass, u64, u64)> {
+        let total = self.epoch_vocab.symbol_support(sym);
+        if total < crate::ecology::MIN_EPOCH_SUPPORT {
+            return None;
+        }
+        let (meaning, hits) = self.epoch_vocab.modal_state(sym)?;
+        let precise = u128::from(hits) * u128::from(crate::ecology::PRECISION_DEN)
+            >= u128::from(total) * u128::from(crate::ecology::PRECISION_NUM);
+        if !precise || !self.benefit.benefits(sym) {
+            return None;
+        }
+        Some((meaning, hits, total))
+    }
+
+    /// Đếm một bước world; đóng epoch khi đủ [`EPOCH_STEPS`] bước.
+    ///
+    /// Trả về các quy ước **mới** được đề bạt ở lần đóng này (rỗng ở mọi
+    /// bước khác) — người gọi đem chúng sang `knowledge::graph`.
+    ///
+    /// [`EPOCH_STEPS`]: crate::ecology::EPOCH_STEPS
+    pub fn note_step(&mut self) -> Vec<PromotedConvention> {
+        self.steps_in_epoch += 1;
+        if self.steps_in_epoch < crate::ecology::EPOCH_STEPS {
+            return Vec::new();
+        }
+        self.close_epoch()
+    }
+
+    /// Đóng epoch: cập nhật streak từng ký hiệu, đề bạt cái nào đủ lâu,
+    /// rồi xoá bảng đếm để epoch sau đo độc lập.
+    pub fn close_epoch(&mut self) -> Vec<PromotedConvention> {
+        let mut newly = Vec::new();
+        for s in 0..N_SYMBOLS {
+            let sym = s as Symbol;
+            match self.candidate(sym) {
+                Some((meaning, hits, total)) => {
+                    let col = meaning.col() as u8;
+                    if self.streak_meaning[s] == Some(col) {
+                        self.streak_len[s] += 1;
+                    } else {
+                        self.streak_meaning[s] = Some(col);
+                        self.streak_len[s] = 1;
+                    }
+                    if self.streak_len[s] >= crate::ecology::PROMOTION_EPOCHS {
+                        let record = PromotedConvention {
+                            symbol: sym,
+                            meaning_col: col,
+                            epoch: self.epoch_index,
+                            streak: self.streak_len[s],
+                            precision_hits: hits,
+                            precision_total: total,
+                            heard_steps: self.benefit.heard_steps[s],
+                            heard_feeds: self.benefit.heard_feeds[s],
+                            quiet_steps: self.benefit.quiet_steps,
+                            quiet_feeds: self.benefit.quiet_feeds,
+                        };
+                        // Idempotent theo cặp (ký hiệu, nghĩa): quy ước đã
+                        // có tên rồi thì không sinh node trùng mỗi epoch.
+                        let known = self
+                            .promoted
+                            .iter()
+                            .any(|p| p.symbol == sym && p.meaning_col == col);
+                        if !known {
+                            self.promoted.push(record.clone());
+                            newly.push(record);
+                        }
+                    }
+                }
+                None => {
+                    // Nghĩa đứt: streak về 0, phải gây dựng lại từ đầu.
+                    self.streak_meaning[s] = None;
+                    self.streak_len[s] = 0;
+                }
+            }
+        }
+        self.epoch_index += 1;
+        self.steps_in_epoch = 0;
+        self.epoch_vocab = Vocabulary::default();
+        self.benefit = BenefitCounters::default();
+        newly
+    }
+}
+
+/// Một quy ước đã được đề bạt, **kèm bằng chứng đã đo**.
+///
+///
+/// Mọi số là số nguyên (tử/mẫu), không float: file checkpoint phải đọc
+/// lại y nguyên trên máy khác, và một node tri thức nói "chính xác 15/16"
+/// kiểm lại được, còn "0.9375" thì tuỳ cách in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotedConvention {
+    pub symbol: Symbol,
+    /// Nghĩa dưới dạng chỉ số cột — xem [`StateClass::from_col`].
+    pub meaning_col: u8,
+    /// Epoch mà điều kiện đủ lần cuối (epoch đề bạt).
+    pub epoch: u64,
+    /// Số epoch liên tiếp nghĩa này trụ được tính tới lúc đề bạt.
+    pub streak: u32,
+    /// Độ chính xác = `precision_hits / precision_total` trong epoch đó.
+    pub precision_hits: u64,
+    pub precision_total: u64,
+    /// Bằng chứng ích lợi: tỉ lệ ăn khi nghe so với khi im ắng.
+    pub heard_steps: u64,
+    pub heard_feeds: u64,
+    pub quiet_steps: u64,
+    pub quiet_feeds: u64,
+}
+
+impl PromotedConvention {
+    pub fn meaning(&self) -> Option<StateClass> {
+        StateClass::from_col(self.meaning_col as usize)
+    }
+
+    /// Id concept của ký hiệu, ví dụ `symbol_1`.
+    pub fn symbol_concept_id(&self) -> String {
+        format!("symbol_{}", self.symbol)
+    }
+
+    /// Id concept của chính quy ước, ví dụ `convention_sym1_state_res_east`.
+    pub fn concept_id(&self) -> String {
+        let meaning = self.meaning().map_or("state_unknown", |m| m.concept_id());
+        format!("convention_sym{}_{}", self.symbol, meaning)
+    }
+
+    /// Nhãn tự mang bằng chứng: đọc node là biết vì sao nó ở đó.
+    pub fn label(&self) -> String {
+        let meaning = self.meaning().map_or("unknown", |m| m.label());
+        format!(
+            "sym{} ⇒ {} (epoch {}, {} epochs stable, precision {}/{}, feed rate {}/{} heard vs {}/{} quiet)",
+            self.symbol,
+            meaning,
+            self.epoch,
+            self.streak,
+            self.precision_hits,
+            self.precision_total,
+            self.heard_feeds,
+            self.heard_steps,
+            self.quiet_feeds,
+            self.quiet_steps,
+        )
     }
 }
 
@@ -516,5 +817,246 @@ mod tests {
             crate::agents::eval_current(&f, &val),
             "hạt giống phải bắn được"
         );
+    }
+
+    // ── slice 5: nghĩa ↔ cột, ích lợi, đề bạt ─────────────────────────
+
+    #[test]
+    fn state_class_col_round_trips_and_names_are_unique() {
+        let all = [
+            StateClass::North,
+            StateClass::East,
+            StateClass::South,
+            StateClass::West,
+            StateClass::None,
+            StateClass::Resource,
+        ];
+        assert_eq!(all.len(), N_STATE_CLASSES);
+        let mut ids = std::collections::BTreeSet::new();
+        for m in all {
+            assert_eq!(StateClass::from_col(m.col()), Some(m));
+            assert!(ids.insert(m.concept_id()), "id trùng: {}", m.concept_id());
+            assert!(!m.label().is_empty());
+        }
+        assert_eq!(StateClass::from_col(N_STATE_CLASSES), None);
+    }
+
+    #[test]
+    fn modal_state_breaks_ties_toward_the_lowest_column() {
+        let mut joint = [[0u64; N_STATE_CLASSES]; N_SIGNAL_VALUES];
+        // Sym(0) hoà 5–5 giữa cột 1 và cột 3 → cột 1 phải thắng.
+        joint[1][1] = 5;
+        joint[1][3] = 5;
+        let v = vocab_from(joint);
+        assert_eq!(v.modal_state(0), Some((StateClass::East, 5)));
+        assert_eq!(v.symbol_support(0), 10);
+        // Ký hiệu chưa bao giờ phát → không có nghĩa nào.
+        assert_eq!(v.modal_state(2), None);
+        assert_eq!(v.symbol_support(2), 0);
+    }
+
+    #[test]
+    fn benefit_counters_split_heard_and_quiet_steps() {
+        let mut b = BenefitCounters::default();
+        let mut hear = [false; N_SYMBOLS];
+        hear[1] = true;
+        hear[2] = true;
+        b.record(&hear, true); // nghe 1 và 2, ăn được → cộng cả hai hàng
+        b.record(&[false; N_SYMBOLS], false);
+        b.record(&[false; N_SYMBOLS], true);
+
+        assert_eq!(b.heard_steps[1], 1);
+        assert_eq!(b.heard_steps[2], 1);
+        assert_eq!(b.heard_feeds[1], 1);
+        assert_eq!(b.heard_steps[0], 0);
+        assert_eq!(b.quiet_steps, 2);
+        assert_eq!(b.quiet_feeds, 1);
+    }
+
+    /// Bơm bộ đếm ích lợi tới một tỉ lệ chính xác cho trước.
+    fn benefit_with(
+        sym: Symbol,
+        heard_steps: u64,
+        heard_feeds: u64,
+        quiet_steps: u64,
+        quiet_feeds: u64,
+    ) -> BenefitCounters {
+        let mut b = BenefitCounters::default();
+        let s = sym as usize;
+        b.heard_steps[s] = heard_steps;
+        b.heard_feeds[s] = heard_feeds;
+        b.quiet_steps = quiet_steps;
+        b.quiet_feeds = quiet_feeds;
+        b
+    }
+
+    #[test]
+    fn benefit_criterion_compares_feed_rates_exactly() {
+        use crate::ecology::MIN_BENEFIT_SUPPORT;
+        let n = MIN_BENEFIT_SUPPORT;
+        // 3/8 = 0.375 > 1/10 = 0.1 → có ích.
+        assert!(benefit_with(0, n, 3, 10, 1).benefits(0));
+        // 1/8 = 0.125 < 3/10 = 0.3 → vô ích.
+        assert!(!benefit_with(0, n, 1, 10, 3).benefits(0));
+        // Bằng nhau (2/8 = 5/20) → vẫn tính là có ích (tiêu chí là ≥).
+        assert!(benefit_with(0, n, 2, 20, 5).benefits(0));
+    }
+
+    #[test]
+    fn benefit_needs_support_and_handles_missing_baseline() {
+        use crate::ecology::MIN_BENEFIT_SUPPORT;
+        // Dưới độ đỡ: 1/1 = 100% cũng không tính.
+        assert!(!benefit_with(0, MIN_BENEFIT_SUPPORT - 1, 1, 10, 0).benefits(0));
+        // Không có nền so sánh: chỉ đạt nếu thật sự ăn được lần nào.
+        assert!(benefit_with(0, MIN_BENEFIT_SUPPORT, 1, 0, 0).benefits(0));
+        assert!(!benefit_with(0, MIN_BENEFIT_SUPPORT, 0, 0, 0).benefits(0));
+        // Ký hiệu ngoài bảng chữ không bao giờ có ích.
+        assert!(!benefit_with(0, MIN_BENEFIT_SUPPORT, 8, 0, 0).benefits(N_SYMBOLS as Symbol));
+    }
+
+    /// Nạp một epoch "sạch": `n` lần phát `sym` đúng nghĩa `state`, cộng
+    /// bộ đếm ích lợi vượt ngưỡng rõ ràng (4/8 khi nghe vs 1/10 khi im).
+    fn stack_clean_epoch(t: &mut ConventionTracker, sym: Symbol, state: StateClass, n: u64) {
+        for _ in 0..n {
+            t.record_signal(SignalValue::Sym(sym), state);
+        }
+        let mut hear = [false; N_SYMBOLS];
+        hear[sym as usize] = true;
+        for i in 0..crate::ecology::MIN_BENEFIT_SUPPORT {
+            t.record_benefit(&hear, i % 2 == 0);
+        }
+        for i in 0..10 {
+            t.record_benefit(&[false; N_SYMBOLS], i == 0);
+        }
+    }
+
+    #[test]
+    fn tracker_promotes_only_after_enough_consecutive_epochs() {
+        use crate::ecology::{MIN_EPOCH_SUPPORT, PROMOTION_EPOCHS};
+        let mut t = ConventionTracker::default();
+        for e in 1..=PROMOTION_EPOCHS {
+            stack_clean_epoch(&mut t, 1, StateClass::East, MIN_EPOCH_SUPPORT);
+            assert!(t.candidate(1).is_some(), "epoch {e} phải là ứng viên");
+            let newly = t.close_epoch();
+            if e < PROMOTION_EPOCHS {
+                assert!(newly.is_empty(), "epoch {e}: đề bạt quá sớm");
+                assert_eq!(t.streak_len[1], e);
+            } else {
+                assert_eq!(newly.len(), 1, "epoch {e}: phải đề bạt đúng 1 quy ước");
+                let p = &newly[0];
+                assert_eq!(p.symbol, 1);
+                assert_eq!(p.meaning(), Some(StateClass::East));
+                assert_eq!(p.streak, PROMOTION_EPOCHS);
+                assert_eq!(p.precision_hits, MIN_EPOCH_SUPPORT);
+                assert_eq!(p.precision_total, MIN_EPOCH_SUPPORT);
+            }
+        }
+        // Đóng epoch xoá bảng đếm để epoch sau đo độc lập.
+        assert_eq!(t.epoch_index, u64::from(PROMOTION_EPOCHS));
+        assert_eq!(t.epoch_vocab, Vocabulary::default());
+        assert_eq!(t.benefit, BenefitCounters::default());
+        assert_eq!(t.steps_in_epoch, 0);
+    }
+
+    #[test]
+    fn changing_meaning_restarts_the_streak() {
+        use crate::ecology::{MIN_EPOCH_SUPPORT, PROMOTION_EPOCHS};
+        let mut t = ConventionTracker::default();
+        for _ in 0..PROMOTION_EPOCHS - 1 {
+            stack_clean_epoch(&mut t, 0, StateClass::North, MIN_EPOCH_SUPPORT);
+            assert!(t.close_epoch().is_empty());
+        }
+        // Nghĩa đổi sang South ⇒ streak về 1, không đề bạt.
+        stack_clean_epoch(&mut t, 0, StateClass::South, MIN_EPOCH_SUPPORT);
+        assert!(t.close_epoch().is_empty(), "đổi nghĩa mà vẫn đề bạt");
+        assert_eq!(t.streak_len[0], 1);
+        assert_eq!(t.streak_meaning[0], Some(StateClass::South.col() as u8));
+    }
+
+    #[test]
+    fn a_silent_epoch_breaks_the_streak_to_zero() {
+        use crate::ecology::MIN_EPOCH_SUPPORT;
+        let mut t = ConventionTracker::default();
+        stack_clean_epoch(&mut t, 0, StateClass::North, MIN_EPOCH_SUPPORT);
+        assert!(t.close_epoch().is_empty());
+        assert_eq!(t.streak_len[0], 1);
+        // Epoch không ai nói gì: ứng viên biến mất, streak về 0.
+        assert!(t.close_epoch().is_empty());
+        assert_eq!(t.streak_len[0], 0);
+        assert_eq!(t.streak_meaning[0], None);
+    }
+
+    #[test]
+    fn below_support_never_promotes_however_precise() {
+        use crate::ecology::{MIN_EPOCH_SUPPORT, PROMOTION_EPOCHS};
+        let mut t = ConventionTracker::default();
+        for _ in 0..PROMOTION_EPOCHS + 2 {
+            // Chính xác 100% nhưng chỉ (support − 1) lần phát.
+            stack_clean_epoch(&mut t, 2, StateClass::West, MIN_EPOCH_SUPPORT - 1);
+            assert!(t.candidate(2).is_none());
+            assert!(t.close_epoch().is_empty());
+        }
+        assert!(t.promoted.is_empty());
+    }
+
+    #[test]
+    fn imprecise_symbol_never_promotes() {
+        use crate::ecology::PROMOTION_EPOCHS;
+        let mut t = ConventionTracker::default();
+        for _ in 0..PROMOTION_EPOCHS + 1 {
+            // 10 lần North + 10 lần South: độ đỡ 20 ≥ 16 nhưng chính xác
+            // chỉ 10/20 = 50% < 7/8.
+            stack_clean_epoch(&mut t, 3, StateClass::North, 10);
+            for _ in 0..10 {
+                t.record_signal(SignalValue::Sym(3), StateClass::South);
+            }
+            assert!(t.candidate(3).is_none());
+            assert!(t.close_epoch().is_empty());
+        }
+        assert!(t.promoted.is_empty());
+    }
+
+    #[test]
+    fn promotion_is_idempotent_and_carries_its_evidence() {
+        use crate::ecology::{MIN_EPOCH_SUPPORT, PROMOTION_EPOCHS};
+        let mut t = ConventionTracker::default();
+        let mut total_newly = 0;
+        for _ in 0..PROMOTION_EPOCHS + 4 {
+            stack_clean_epoch(&mut t, 1, StateClass::East, MIN_EPOCH_SUPPORT);
+            total_newly += t.close_epoch().len();
+        }
+        assert_eq!(total_newly, 1, "cùng một quy ước chỉ được đề bạt một lần");
+        assert_eq!(t.promoted.len(), 1);
+
+        let p = &t.promoted[0];
+        assert_eq!(p.symbol_concept_id(), "symbol_1");
+        assert_eq!(p.concept_id(), "convention_sym1_state_res_east");
+        let label = p.label();
+        // Node phải tự mang bằng chứng: nghĩa, epoch, phân số chính xác,
+        // và cả hai tỉ lệ ăn — đọc node là kiểm lại được vì sao nó ở đó.
+        for needle in ["resource to the East", "precision", "16/16", "4/8", "1/10"] {
+            assert!(label.contains(needle), "label thiếu {needle}: {label}");
+        }
+    }
+
+    #[test]
+    fn note_step_closes_the_epoch_exactly_on_the_boundary() {
+        use crate::ecology::{EPOCH_STEPS, MIN_EPOCH_SUPPORT, PROMOTION_EPOCHS};
+        let mut t = ConventionTracker::default();
+        for epoch in 0..PROMOTION_EPOCHS {
+            stack_clean_epoch(&mut t, 0, StateClass::North, MIN_EPOCH_SUPPORT);
+            for step in 1..EPOCH_STEPS {
+                assert!(t.note_step().is_empty(), "chưa tới biên mà đã đóng");
+                assert_eq!(t.steps_in_epoch, step);
+            }
+            let newly = t.note_step(); // bước thứ EPOCH_STEPS
+            assert_eq!(t.epoch_index, u64::from(epoch) + 1);
+            assert_eq!(t.steps_in_epoch, 0);
+            if epoch + 1 == PROMOTION_EPOCHS {
+                assert_eq!(newly.len(), 1);
+            } else {
+                assert!(newly.is_empty());
+            }
+        }
     }
 }

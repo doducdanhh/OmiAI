@@ -19,9 +19,14 @@ checkpoints/
     │   ├── grid.bin              # world CA grid
     │   ├── atoms.cbor
     │   ├── registry.cbor
-    │   └── rng_state.bin
+    │   ├── rng_state.bin
+    │   ├── airwave.cbor
+    │   └── vocabulary.cbor
+    ├── communication/            # slice 5
+    │   └── conventions.cbor      # ConventionTracker (epoch vocab, benefit, streaks, promoted)
+    ├── knowledge_graph/          # slice 5
+    │   └── graph.cbor            # {concepts: [Concept], relations: [(from,to,kind)]}
     ├── logic/clauses.cbor        # (later slices)
-    ├── knowledge_graph/graph.cbor
     ├── evolution/population.cbor
     ├── causal/dag.cbor
     └── ...
@@ -126,19 +131,22 @@ offset  size  field
   header `flags` byte (bit 0). A resumed run restores exact phase so
   Margolus partitions align with the saved step.
 
-## 5b. `world/` — full world bundle (slice 2, implemented)
+## 5b. `world/` — full world bundle (slice 2, slice 5 extended)
 
-`impl Checkpointable for World` (in `world_bundle.rs`) writes six files
-under `world/`, each hashed into `manifest.json` as `world/<name>`:
+`impl Checkpointable for World` (in `world_bundle.rs`) writes **eight** files
+under `world/`, `communication/`, and `knowledge_graph/`, each hashed into
+`manifest.json` as `<subdir>/<name>`:
 
-| file | content |
-|---|---|
-| `grid.bin` | §5 format (1 byte/cell body, phase in flags byte) |
-| `atoms.cbor` | CBOR `{step_count: u64, atoms: [{pos, energy, gene, age}]}` |
-| `registry.cbor` | CBOR `{genomes: [Genome]}` theo thứ tự slot |
-| `rng_state.bin` | 32 bytes: u64 LE seed + u64 LE stream + u128 LE word_pos |
-| `airwave.cbor` | CBOR `Vec<Option<Symbol>>` — current step's signal grid |
-| `vocabulary.cbor` | CBOR `Vocabulary {joint, total}` — accumulated MI stats |
+| file | content | since |
+|---|---|---|
+| `world/grid.bin` | §5 format (1 byte/cell body, phase in flags byte) | slice 2 |
+| `world/atoms.cbor` | CBOR `{step_count: u64, atoms: [{pos, energy, gene, age}]}` | slice 2 |
+| `world/registry.cbor` | CBOR `{genomes: [Genome]}` theo thứ tự slot | slice 2 |
+| `world/rng_state.bin` | 32 bytes: u64 LE seed + u64 LE stream + u128 LE word_pos | slice 2 |
+| `world/airwave.cbor` | CBOR `Vec<Option<Symbol>>` — current step's signal grid | slice 3 |
+| `world/vocabulary.cbor` | CBOR `Vocabulary {joint, total}` — accumulated MI stats | slice 3 |
+| `communication/conventions.cbor` | CBOR `ConventionTracker` — epoch vocab, benefit, streaks, promoted conventions | slice 5 |
+| `knowledge_graph/graph.cbor` | CBOR `{concepts: [Concept], relations: [(from,to,kind)]}` — promoted conventions as named graph nodes | slice 5 |
 
 - RNG resume (ADR-0006): `ChaCha8Rng::seed_from_u64(seed)` →
   `set_stream(stream)` → `set_word_pos(word_pos)`.
@@ -148,6 +156,12 @@ under `world/`, each hashed into `manifest.json` as `world/<name>`:
   position must be inside the loaded grid and every `gene` slot must
   exist in `registry.cbor`. A dangling reference is `Corrupt`, not a
   silently inert atom (§4: stop loudly, never skip).
+- **Backward compatibility (slice 5 §6)**: the two new payloads
+  (`communication/conventions.cbor` and `knowledge_graph/graph.cbor`)
+  are **optional on load**. A checkpoint written by slice 2/3/4 lacks them;
+  the loader supplies `ConventionTracker::default()` and
+  `KnowledgeGraph::new()` instead of failing. Because the old schema is a
+  valid subset, `format_version` remains `1` — no minor bump needed.
 - Bit-exact resume is test-enforced (`tests/world_roundtrip.rs`).
 
 ## 6. Compatibility policy
@@ -157,3 +171,11 @@ under `world/`, each hashed into `manifest.json` as `world/<name>`:
 - Adding a new optional field = minor bump inside `format_version`
   encoding (e.g. `1_001`); changing/removing a field or altering any
   byte layout here = major bump to `2`, with a migration note.
+- **Exception for slice 5**: the two new payloads are optional on load
+  without a version bump, because they extend the schema by *adding new
+  files* rather than changing existing ones. A v1 loader that does not
+  know about them will still succeed (it only hashes the files listed in
+  the manifest). The slice-5 loader simply provides defaults when the
+  optional files are absent. This is the same pattern as "new optional
+  field inside an existing payload" — a logical minor extension that
+  doesn't break old readers.

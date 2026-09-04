@@ -12,6 +12,7 @@
 //! implementation for the world CA grid.
 
 pub mod ca_grid;
+pub mod communication;
 pub mod error;
 pub mod fsutil;
 pub mod index;

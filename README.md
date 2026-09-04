@@ -19,7 +19,7 @@ backpropagation, criterion benchmarks before any performance claim.
 
 ## Status: what's actually implemented (and tested)
 
-`cargo test --workspace` currently runs **276 tests across 38 test
+`cargo test --workspace` currently runs **341 tests across 42 test
 targets, all passing**, plus proptests and doc tests. Highlights:
 
 - **`omiai-core`** — full first-order logic stack: Formula/Term AST, CNF
@@ -50,17 +50,31 @@ targets, all passing**, plus proptests and doc tests. Highlights:
   proptest-checked. Slice 2 adds the living layer: `FormulaRegistry`
   (generational arena of LTL genomes), atoms with energy metabolism /
   feeding / reproduction, agents that decode a propositional policy from
-  their LTL genome over 4-direction observations, the deterministic
-  5-phase world loop (ChaCha8-seeded — same seed ⇒ bit-exact trajectory),
-  arity-preserving mutation, and world-invariant proptests.
+  their LTL genome over 4-direction observations. Slice 3–4 add emergent
+  communication: 6-symbol Lewis signaling game over `airwave`,
+  `Vocabulary` accumulating co-occurrence + MI, team reward on MI
+  threshold. Slice 5 adds **heritable voice** (`inherit_voice` with
+  `VOICE_MUTATION_PROB`), **benefit measurement** (`BenefitCounters`),
+  **epoch-based convention tracking** (`ConventionTracker`), and
+  **promotion to knowledge graph** (`promote_knowledge` phase) — 3
+  consecutive epochs meeting support (16), precision (7/8), and benefit
+  (feed-rate cross-multiplied) thresholds promote a convention into a
+  named graph node with evidence in its label. World loop is now **8
+  phases**: `ca_step → metabolism → speak → agent_act →
+  reproduce_and_evolve → team_reward → promote_knowledge → snapshot`.
+  Deterministic via ChaCha8Rng (seed/stream/word_pos, ADR-0006).
 - **`omiai-checkpoint`** — checkpoint-v1 directory format:
   `Checkpointable` trait, BLAKE3 hashing, atomic writes
   (tmp→fsync→rename→dir-fsync), manifest verification with tamper
   detection, byte-exact CA-grid round-trip + conservation proptests,
   retention window (keep-N recent + milestones), `index.json` with
-  rebuild fallback, and the slice-2 world bundle — grid + atoms +
-  registry + RNG state with **bit-exact resume** proven by round-trip
-  test.
+  rebuild fallback, and the **slice-5 world bundle** — 8 payloads:
+  `world/{grid.bin, atoms.cbor, registry.cbor, rng_state.bin, airwave.cbor,
+  vocabulary.cbor}` + `communication/conventions.cbor` +
+  `knowledge_graph/graph.cbor`. **Backward compatible**: checkpoints from
+  slices 2–4 (missing the two new files) load with empty tracker + empty
+  graph; `format_version` stays `1`. Bit-exact resume proven by
+  round-trip tests.
   Format spec: [`docs/format-spec/checkpoint-v1.md`](docs/format-spec/checkpoint-v1.md).
 
 Integration tests wire pillars together end-to-end (NLP → logic → proof;
@@ -69,17 +83,15 @@ the same posterior).
 
 ## What's scaffolded (types + doc comments, not yet implemented)
 
-- `omiai-world`: communication and multi-species ecology — the substrate,
-  agents, world loop and checkpoint resume are real; inter-agent
-  signaling is not.
 - `omiai-core`: parts of ASP solving and higher-order unification.
 - `omiai-knowledge::discocat`, `omiai-probabilistic::{kolmogorov,
   solomonoff}`, `omiai-causal::icp` (narrow), `omiai-memory::procedural`.
 - `omiai-export` (model.omiai tar+zstd bundles), `omiai-runtime`
   (`load(bundle)` + step loop), `omiai-serve` (axum `/infer`),
   `omiai-cli` — thin shells awaiting the slices that need them.
-- Remaining checkpoint payloads (logic clauses, graphs, populations,
-  DAGs) — grid + world bundle are done.
+- Remaining checkpoint payloads (logic clauses, evolution populations,
+  causal DAGs, reservoir weights, active inference beliefs) — world bundle
+  with slice-5 extensions is done.
 
 Each scaffold module's doc comment states what it is meant to hold.
 
@@ -89,12 +101,17 @@ Each scaffold module's doc comment states what it is meant to hold.
 2. ~~knowledge graph + chaining~~ ✅ · probabilistic/causal core ✅ ·
    neuro reservoirs ✅ · evolution CGP ✅ · memory ✅
 3. ~~`omiai-world`: agents + world loop over the existing substrate~~ ✅
-   done and tested
-4. ~~Checkpoint payloads for every pillar + retention policy~~ — world
-   bundle ✅ + retention ✅ · other pillars' payloads remain
-5. `omiai-runtime`: deterministic resume from checkpoints
-6. `omiai-export` / `omiai-serve` / `omiai-cli`
-7. Meta-cognition last, once it has a prover and search worth improving
+   done and tested (slice 2)
+4. ~~`omiai-world`: emergent communication (speak, airwave, vocabulary,
+   team reward)~~ ✅ done and tested (slice 3–4)
+5. ~~`omiai-world`: voice inheritance + benefit measurement + convention
+   promotion to knowledge graph~~ ✅ done and tested (slice 5)
+6. ~~Checkpoint payloads for every pillar + retention policy~~ — world
+   bundle (now 8 files incl. conventions + graph) ✅ + retention ✅ ·
+   other pillars' payloads remain
+7. `omiai-runtime`: deterministic resume from checkpoints
+8. `omiai-export` / `omiai-serve` / `omiai-cli`
+9. Meta-cognition last, once it has a prover and search worth improving
 
 ## Building
 

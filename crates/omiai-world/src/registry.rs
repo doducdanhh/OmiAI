@@ -198,9 +198,9 @@ mod tests {
     #[test]
     fn export_import_genomes_preserves_formulas() {
         let mut reg1 = FormulaRegistry::new();
-        let f1 = reg1.insert(genome(LtlFormula::atom("a")));
-        let f2 = reg1.insert(genome(LtlFormula::and(LtlFormula::atom("b"), LtlFormula::atom("c"))));
-        let f3 = reg1.insert(genome(LtlFormula::g(LtlFormula::atom("d"))));
+        let _f1 = reg1.insert(genome(LtlFormula::atom("a")));
+        let _f2 = reg1.insert(genome(LtlFormula::and(LtlFormula::atom("b"), LtlFormula::atom("c"))));
+        let _f3 = reg1.insert(genome(LtlFormula::g(LtlFormula::atom("d"))));
 
         // Export
         let exported = reg1.export_genomes();
