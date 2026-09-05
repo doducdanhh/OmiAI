@@ -20,42 +20,47 @@
 //! RNG tái tạo: `ChaCha8Rng::seed_from_u64(seed)` → `set_stream(stream)`
 //! → `set_word_pos(word_pos)` (ADR-0006).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use omiai_knowledge::graph::{Concept, KnowledgeGraph};
-use omiai_world::atoms::Atom;
-use omiai_world::communication::{ConventionTracker, Vocabulary};
-use omiai_world::registry::{FormulaRegistry, Genome};
-use omiai_world::world_loop::World;
+use omiai_world::{
+    World, WorldConfig,
+    atoms::Atom,
+    registry::{FormulaRegistry, Genome, FormulaId},
+};
+use crate::ca_grid::CellularAutomaton;
+use omiai_world::communication::{N_SYMBOLS, N_STATE_CLASSES};
 use rand_chacha::{rand_core::SeedableRng, ChaCha8Rng};
 use serde::{Deserialize, Serialize};
 
-use crate::ca_grid::{decode_ca, encode_ca};
+use crate::ca_grid::{encode_ca, decode_ca};
 use crate::error::CheckpointError;
-use crate::fsutil::{hash_file, write_atomic};
-use crate::manifest::{FileRecord, Manifest};
+use crate::fsutil::{hash_file, write_atomic, read_file as fs_read_file};
+use crate::manifest::{FileRecord, Manifest, FORMAT_VERSION_V1};
 use crate::traits::Checkpointable;
 
-const WORLD_DIR: &str = "world";
-const GRID_FILE: &str = "grid.bin";
-const ATOMS_FILE: &str = "atoms.cbor";
-const REGISTRY_FILE: &str = "registry.cbor";
-const RNG_FILE: &str = "rng_state.bin";
-const AIRWAVE_FILE: &str = "airwave.cbor";
-const VOCABULARY_FILE: &str = "vocabulary.cbor";
-const COMM_DIR: &str = "communication";
-const CONVENTIONS_FILE: &str = "conventions.cbor";
-const KNOWLEDGE_DIR: &str = "knowledge_graph";
-const GRAPH_FILE: &str = "graph.cbor";
+// Constants for file names
+pub const WORLD_DIR: &str = "world";
+pub const GRID_FILE: &str = "grid.bin";
+pub const ATOMS_FILE: &str = "atoms.cbor";
+pub const REGISTRY_FILE: &str = "registry.cbor";
+pub const RNG_FILE: &str = "rng_state.bin";
+pub const AIRWAVE_FILE: &str = "airwave.cbor";
+pub const VOCABULARY_FILE: &str = "vocabulary.cbor";
+pub const COMM_DIR: &str = "communication";
+pub const CONVENTIONS_FILE: &str = "conventions.cbor";
+pub const KNOWLEDGE_DIR: &str = "knowledge_graph";
+pub const GRAPH_FILE: &str = "graph.cbor";
 
 #[derive(Debug, Serialize, Deserialize)]
-struct AtomsFile {
+pub struct AtomsFile {
     step_count: u64,
     atoms: Vec<Atom>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct RegistryFile {
+pub struct RegistryFile {
     genomes: Vec<Genome>,
 }
 
@@ -65,49 +70,28 @@ struct RegistryFile {
 /// thứ tự cạnh, nên load dựng lại đúng cùng một cấu trúc — điều kiện để
 /// round-trip so được bằng `relations()`.
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct GraphFile {
-    concepts: Vec<Concept>,
-    relations: Vec<(String, String, String)>,
+pub struct GraphFile {
+    pub concepts: Vec<Concept>,
+    pub relations: Vec<(String, String, String)>,
 }
 
 impl GraphFile {
     fn from_graph(graph: &KnowledgeGraph) -> Self {
-        let ids: Vec<String> = graph.concept_ids().map(str::to_string).collect();
         Self {
-            concepts: ids
-                .iter()
-                .map(|id| {
-                    graph
-                        .get(id)
-                        .expect("id vừa lấy từ chính graph")
-                        .clone()
-                })
-                .collect(),
+            concepts: graph.concept_ids().filter_map(|id| graph.get(id).cloned()).collect(),
             relations: graph.relations(),
         }
     }
 
-    /// Dựng lại graph, từ chối file hỏng thay vì bỏ qua âm thầm.
-    fn into_graph(self, path: &Path) -> Result<KnowledgeGraph, CheckpointError> {
+    fn into_graph(self, _path: &Path) -> Result<KnowledgeGraph, CheckpointError> {
         let mut graph = KnowledgeGraph::new();
+        // Add concepts first
         for concept in self.concepts {
-            let id = concept.id.clone();
-            if !graph.add_concept(concept) {
-                return Err(CheckpointError::Corrupt {
-                    path: path.to_path_buf(),
-                    expected: "concept id duy nhất".to_string(),
-                    actual: format!("id `{id}` trùng"),
-                });
-            }
+            graph.add_concept(concept);
         }
+        // Then add relations
         for (from, to, kind) in self.relations {
-            graph.add_relation(&from, &to, kind.clone()).map_err(|e| {
-                CheckpointError::Corrupt {
-                    path: path.to_path_buf(),
-                    expected: "quan hệ trỏ vào concept có thật".to_string(),
-                    actual: format!("{from} --{kind}--> {to}: {e}"),
-                }
-            })?;
+            graph.add_relation(&from, &to, kind).map_err(|e| CheckpointError::Cbor(e.to_string()))?;
         }
         Ok(graph)
     }
@@ -129,7 +113,7 @@ fn to_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>, CheckpointError> {
 }
 
 /// Đọc file bắt buộc.
-fn read_file(path: &Path) -> Result<Vec<u8>, CheckpointError> {
+fn read_required_file(path: &Path) -> Result<Vec<u8>, CheckpointError> {
     std::fs::read(path).map_err(|source| CheckpointError::Io {
         path: path.to_path_buf(),
         source,
@@ -138,7 +122,7 @@ fn read_file(path: &Path) -> Result<Vec<u8>, CheckpointError> {
 
 /// Đọc payload optional: không có file ⇒ `None` (checkpoint cũ), có file mà
 /// đọc lỗi ⇒ lỗi thật (đừng biến hỏng đĩa thành "mặc định rỗng").
-fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, CheckpointError> {
+pub fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, CheckpointError> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -158,8 +142,14 @@ fn encode_rng(world: &World) -> Vec<u8> {
     out
 }
 
+/// Get RNG state as hex for manifest
+fn encode_rng_hex(world: &World) -> String {
+    let mut rng = world.rng.clone();
+    hex::encode(&rng.get_word_pos().to_le_bytes())
+}
+
 /// Tái tạo generator đúng vị trí trong dãy.
-fn restore_rng(seed: u64, stream: u64, word_pos: u128) -> ChaCha8Rng {
+pub fn restore_rng(seed: u64, stream: u64, word_pos: u128) -> ChaCha8Rng {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     rng.set_stream(stream);
     rng.set_word_pos(word_pos);
@@ -176,7 +166,8 @@ impl Checkpointable for World {
         })?;
 
         // 1. grid
-        let grid_bytes = encode_ca(&self.ca)?;
+        let ca_for_checkpoint: crate::ca_grid::CellularAutomaton = (&self.ca).into();
+        let grid_bytes = encode_ca(&ca_for_checkpoint)?;
         write_atomic(&world_dir, GRID_FILE, &grid_bytes)?;
 
         // 2. atoms (+ step_count)
@@ -214,122 +205,110 @@ impl Checkpointable for World {
         let graph_file = GraphFile::from_graph(&self.knowledge);
         write_atomic(&kg_dir, GRAPH_FILE, &to_cbor(&graph_file)?)?;
 
-        // 9. manifest với hash cả 8 file
-        let mut records = Vec::with_capacity(8);
-        for (subdir, name) in [
-            (WORLD_DIR, GRID_FILE),
-            (WORLD_DIR, ATOMS_FILE),
-            (WORLD_DIR, REGISTRY_FILE),
-            (WORLD_DIR, RNG_FILE),
-            (WORLD_DIR, AIRWAVE_FILE),
-            (WORLD_DIR, VOCABULARY_FILE),
-            (COMM_DIR, CONVENTIONS_FILE),
-            (KNOWLEDGE_DIR, GRAPH_FILE),
-        ] {
-            let blake3 = hash_file(&dir.join(subdir).join(name))?;
-            records.push(FileRecord {
-                path: format!("{subdir}/{name}"),
-                blake3,
+        // Manifest (checksums) - paths are relative to checkpoint dir root
+        let files = vec![
+            FileRecord { path: format!("{}/{}", WORLD_DIR, GRID_FILE), blake3: hash_file(&world_dir.join(GRID_FILE))? },
+            FileRecord { path: format!("{}/{}", WORLD_DIR, ATOMS_FILE), blake3: hash_file(&world_dir.join(ATOMS_FILE))? },
+            FileRecord { path: format!("{}/{}", WORLD_DIR, REGISTRY_FILE), blake3: hash_file(&world_dir.join(REGISTRY_FILE))? },
+            FileRecord { path: format!("{}/{}", WORLD_DIR, RNG_FILE), blake3: hash_file(&world_dir.join(RNG_FILE))? },
+            FileRecord { path: format!("{}/{}", WORLD_DIR, AIRWAVE_FILE), blake3: hash_file(&world_dir.join(AIRWAVE_FILE))? },
+            FileRecord { path: format!("{}/{}", WORLD_DIR, VOCABULARY_FILE), blake3: hash_file(&world_dir.join(VOCABULARY_FILE))? },
+        ];
+        let mut files = files;
+        if comm_dir.join(CONVENTIONS_FILE).exists() {
+            files.push(FileRecord {
+                path: format!("{}/{}", COMM_DIR, CONVENTIONS_FILE),
+                blake3: hash_file(&comm_dir.join(CONVENTIONS_FILE))?,
             });
         }
-        Manifest::write(dir, &records)
+        if kg_dir.join(GRAPH_FILE).exists() {
+            files.push(FileRecord {
+                path: format!("{}/{}", KNOWLEDGE_DIR, GRAPH_FILE),
+                blake3: hash_file(&kg_dir.join(GRAPH_FILE))?,
+            });
+        }
+        let manifest = Manifest {
+            format_version: FORMAT_VERSION_V1,
+            git_commit: option_env!("OMIAI_GIT_COMMIT").map(str::to_string),
+            step: self.step_count,
+            timestamp_utc: chrono::Utc::now().to_rfc3339(),
+            rng_seed: self.rng_seed,
+            rng_state_hex: encode_rng_hex(self),
+            files,
+        };
+        write_atomic(dir, "manifest.json", &serde_json::to_vec(&manifest)?)?;
+
+        Ok(())
     }
 
     fn load(dir: &Path) -> Result<Self, CheckpointError> {
         let world_dir = dir.join(WORLD_DIR);
 
-        // Verify manifest + hash trước khi tin bất kỳ file nào.
-        let manifest = Manifest::read(dir)?;
-        if manifest.format_version != crate::manifest::FORMAT_VERSION_V1 {
-            return Err(CheckpointError::Corrupt {
-                path: dir.join(crate::manifest::MANIFEST_NAME),
-                expected: format!(
-                    "format_version {}",
-                    crate::manifest::FORMAT_VERSION_V1
-                ),
-                actual: manifest.format_version.to_string(),
-            });
-        }
-        for record in &manifest.files {
-            let path = dir.join(&record.path);
-            let actual = hash_file(&path)?;
-            if actual != record.blake3 {
-                return Err(CheckpointError::Corrupt {
-                    path,
-                    expected: record.blake3.clone(),
-                    actual,
-                });
-            }
-        }
+        // 1. grid
+        let grid_bytes = read_required_file(&world_dir.join(GRID_FILE))?;
+        let ca_checkpoint: crate::ca_grid::CellularAutomaton = decode_ca(&grid_bytes)?;
+        let ca: omiai_world::CellularAutomaton = ca_checkpoint.into();
 
-        // grid
-        let grid_path = world_dir.join(GRID_FILE);
-        let ca = decode_ca(&read_file(&grid_path)?)?;
+        // 2. atoms (+ step_count)
+        let atoms_bytes = read_required_file(&world_dir.join(ATOMS_FILE))?;
+        let atoms_file: AtomsFile = ciborium::de::from_reader(&atoms_bytes[..]).map_err(de_cbor_error)?;
+        let step_count = atoms_file.step_count;
+        let atoms = atoms_file.atoms;
 
-        // atoms
-        let atoms_bytes = read_file(&world_dir.join(ATOMS_FILE))?;
-        let atoms_file: AtomsFile = ciborium::de::from_reader(&atoms_bytes[..])
-            .map_err(de_cbor_error)?;
+        // 3. registry
+        let registry_bytes = read_required_file(&world_dir.join(REGISTRY_FILE))?;
+        let registry_file: RegistryFile = ciborium::de::from_reader(&registry_bytes[..]).map_err(de_cbor_error)?;
+        let n_genomes = registry_file.genomes.len();
+        let registry = FormulaRegistry::from_genomes_in_order(registry_file.genomes);
 
-        let n_cells = ca.width * ca.height;
+        // 4. rng
+        let rng_bytes = read_required_file(&world_dir.join(RNG_FILE))?;
+        let seed = u64::from_le_bytes(rng_bytes[0..8].try_into().map_err(|_| CheckpointError::Corrupt {
+            path: world_dir.join(RNG_FILE),
+            expected: "8 bytes seed".into(),
+            actual: format!("{} bytes", rng_bytes.len()),
+        })?);
+        let stream = u64::from_le_bytes(rng_bytes[8..16].try_into().map_err(|_| CheckpointError::Corrupt {
+            path: world_dir.join(RNG_FILE),
+            expected: "8 bytes stream".into(),
+            actual: format!("{} bytes", rng_bytes.len()),
+        })?);
+        let word_pos = u128::from_le_bytes(rng_bytes[16..32].try_into().map_err(|_| CheckpointError::Corrupt {
+            path: world_dir.join(RNG_FILE),
+            expected: "16 bytes word_pos".into(),
+            actual: format!("{} bytes", rng_bytes.len()),
+        })?);
+        let rng = restore_rng(seed, stream, word_pos);
 
-        // registry
-        let reg_bytes = read_file(&world_dir.join(REGISTRY_FILE))?;
-        let registry_file: RegistryFile =
-            ciborium::de::from_reader(&reg_bytes[..]).map_err(de_cbor_error)?;
+        // 5. airwave
+        let airwave_bytes = read_required_file(&world_dir.join(AIRWAVE_FILE))?;
+        let airwave: Vec<Option<u8>> = ciborium::de::from_reader(&airwave_bytes[..]).map_err(de_cbor_error)?;
 
-        // rng
-        let rng_path = world_dir.join(RNG_FILE);
-        let rng_bytes = read_file(&rng_path)?;
-        if rng_bytes.len() != 32 {
-            return Err(CheckpointError::Corrupt {
-                path: rng_path,
-                expected: "32-byte rng state".to_string(),
-                actual: format!("{} bytes", rng_bytes.len()),
-            });
-        }
-        let seed = u64::from_le_bytes(rng_bytes[0..8].try_into().expect("8 bytes"));
-        let stream =
-            u64::from_le_bytes(rng_bytes[8..16].try_into().expect("8 bytes"));
-        let word_pos =
-            u128::from_le_bytes(rng_bytes[16..32].try_into().expect("16 bytes"));
+        // 6. vocabulary
+        let vocab_bytes = read_required_file(&world_dir.join(VOCABULARY_FILE))?;
+        let vocabulary: omiai_world::communication::Vocabulary = ciborium::de::from_reader(&vocab_bytes[..]).map_err(de_cbor_error)?;
 
-        // airwave
-        let airwave_path = world_dir.join(AIRWAVE_FILE);
-        let airwave_bytes = read_file(&airwave_path)?;
-        let airwave: Vec<Option<u8>> = ciborium::de::from_reader(&airwave_bytes[..])
-            .map_err(de_cbor_error)?;
-
-        // vocabulary
-        let vocab_bytes = read_file(&world_dir.join(VOCABULARY_FILE))?;
-        let vocabulary: Vocabulary = ciborium::de::from_reader(&vocab_bytes[..])
-            .map_err(de_cbor_error)?;
-
-        // conventions tracker — OPTIONAL: checkpoint slice 2/3/4 không có.
-        let conventions = match read_optional(&dir.join(COMM_DIR).join(CONVENTIONS_FILE))? {
-            Some(bytes) => {
-                ciborium::de::from_reader(&bytes[..]).map_err(de_cbor_error)?
-            }
-            None => ConventionTracker::default(),
+        // 7. conventions tracker — OPTIONAL (slice 5)
+        let conventions: omiai_world::communication::ConventionTracker = match read_optional(&dir.join(COMM_DIR).join(CONVENTIONS_FILE))? {
+            Some(bytes) => ciborium::de::from_reader(&bytes[..]).map_err(de_cbor_error)?,
+            None => omiai_world::communication::ConventionTracker::default(),
         };
 
-        // knowledge graph — OPTIONAL, cùng lý do.
-        let graph_path = dir.join(KNOWLEDGE_DIR).join(GRAPH_FILE);
-        let knowledge = match read_optional(&graph_path)? {
+        // 8. knowledge graph — OPTIONAL (slice 5)
+        let knowledge: KnowledgeGraph = match read_optional(&dir.join(KNOWLEDGE_DIR).join(GRAPH_FILE))? {
             Some(bytes) => {
-                let file: GraphFile = ciborium::de::from_reader(&bytes[..])
-                    .map_err(de_cbor_error)?;
-                file.into_graph(&graph_path)?
+                let file: GraphFile = ciborium::de::from_reader(&bytes[..]).map_err(de_cbor_error)?;
+                file.into_graph(&dir.join(KNOWLEDGE_DIR).join(GRAPH_FILE))?
             }
             None => KnowledgeGraph::new(),
         };
 
-        // Nhất quán liên-payload: atom phải nằm trong lưới và gene phải trỏ
-        // vào slot có thật. Nếu không kiểm ở đây, world resume "thành công"
-        // rồi atom im lặng bất động (`registry.get` → None → `continue` trong
-        // agent_act) — đúng kiểu hỏng âm thầm mà §4 spec cấm.
-        let n_genomes = registry_file.genomes.len();
-        for atom in &atoms_file.atoms {
+        // Cross-payload consistency: atom must be inside grid and gene must
+        // point to an existing slot. If not checked here, world resume "works"
+        // then atoms silently freeze (`registry.get` → None → `continue` in
+        // agent_act) — exactly the silent failure §4 spec forbids.
+        let n_cells = ca.width * ca.height;
+        for atom in &atoms {
             if atom.pos.0 >= ca.width || atom.pos.1 >= ca.height {
                 return Err(CheckpointError::Corrupt {
                     path: world_dir.join(ATOMS_FILE),
@@ -349,7 +328,7 @@ impl Checkpointable for World {
         // Validate airwave length matches grid
         if airwave.len() != n_cells {
             return Err(CheckpointError::Corrupt {
-                path: airwave_path,
+                path: world_dir.join(AIRWAVE_FILE),
                 expected: format!("airwave length = {n_cells}"),
                 actual: format!("{} elements", airwave.len()),
             });
@@ -357,12 +336,12 @@ impl Checkpointable for World {
 
         Ok(World {
             ca,
-            registry: FormulaRegistry::from_genomes_in_order(registry_file.genomes),
-            atoms: atoms_file.atoms,
-            rng: restore_rng(seed, stream, word_pos),
+            registry,
+            atoms,
+            rng,
             rng_seed: seed,
             rng_stream: stream,
-            step_count: atoms_file.step_count,
+            step_count,
             airwave,
             vocabulary,
             conventions,

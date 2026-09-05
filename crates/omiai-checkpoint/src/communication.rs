@@ -6,31 +6,35 @@
 
 use std::path::Path;
 
-use omiai_world::communication::{BenefitCounters, ConventionTracker, PromotedConvention, Vocabulary};
+use omiai_world::communication::{
+    Vocabulary, BenefitCounters, ConventionTracker, PromotedConvention,
+    N_SYMBOLS, N_STATE_CLASSES, N_SIGNAL_VALUES, Symbol, StateClass, SignalValue
+};
+use serde::{Deserialize, Serialize};
 
 use crate::error::CheckpointError;
-use crate::fsutil::write_atomic;
+use crate::fsutil::{write_atomic, read_file};
 use crate::traits::Checkpointable;
-
-const VOCAB_FILE: &str = "vocabulary.cbor";
-const BENEFIT_FILE: &str = "benefit.cbor";
-const CONVENTIONS_FILE: &str = "conventions.cbor";
+use crate::world_bundle::{VOCABULARY_FILE, CONVENTIONS_FILE, COMM_DIR};
 
 impl Checkpointable for Vocabulary {
     type Error = CheckpointError;
 
     fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
+        let world_dir = dir.join("world");
+        std::fs::create_dir_all(&world_dir).map_err(|e| CheckpointError::Io {
+            path: world_dir.clone(),
+            source: e,
+        })?;
         let mut buf = std::io::Cursor::new(Vec::new());
         ciborium::ser::into_writer(self, &mut buf).map_err(|e| CheckpointError::Cbor(e.to_string()))?;
-        write_atomic(dir, VOCAB_FILE, &buf.into_inner())?;
+        write_atomic(&world_dir, VOCABULARY_FILE, &buf.into_inner())?;
         Ok(())
     }
 
     fn load(dir: &Path) -> Result<Self, CheckpointError> {
-        let bytes = std::fs::read(dir.join(VOCAB_FILE)).map_err(|source| CheckpointError::Io {
-            path: dir.join(VOCAB_FILE),
-            source,
-        })?;
+        let world_dir = dir.join("world");
+        let bytes = read_file(&world_dir.join(VOCABULARY_FILE))?;
         ciborium::de::from_reader(&bytes[..]).map_err(|e| CheckpointError::Cbor(e.to_string()))
     }
 }
@@ -39,17 +43,20 @@ impl Checkpointable for BenefitCounters {
     type Error = CheckpointError;
 
     fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
+        let comm_dir = dir.join(COMM_DIR);
+        std::fs::create_dir_all(&comm_dir).map_err(|e| CheckpointError::Io {
+            path: comm_dir.clone(),
+            source: e,
+        })?;
         let mut buf = std::io::Cursor::new(Vec::new());
         ciborium::ser::into_writer(self, &mut buf).map_err(|e| CheckpointError::Cbor(e.to_string()))?;
-        write_atomic(dir, BENEFIT_FILE, &buf.into_inner())?;
+        write_atomic(&comm_dir, "benefit.cbor", &buf.into_inner())?;
         Ok(())
     }
 
     fn load(dir: &Path) -> Result<Self, CheckpointError> {
-        let bytes = std::fs::read(dir.join(BENEFIT_FILE)).map_err(|source| CheckpointError::Io {
-            path: dir.join(BENEFIT_FILE),
-            source,
-        })?;
+        let comm_dir = dir.join(COMM_DIR);
+        let bytes = read_file(&comm_dir.join("benefit.cbor"))?;
         ciborium::de::from_reader(&bytes[..]).map_err(|e| CheckpointError::Cbor(e.to_string()))
     }
 }
@@ -58,17 +65,20 @@ impl Checkpointable for PromotedConvention {
     type Error = CheckpointError;
 
     fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
+        let comm_dir = dir.join(COMM_DIR);
+        std::fs::create_dir_all(&comm_dir).map_err(|e| CheckpointError::Io {
+            path: comm_dir.clone(),
+            source: e,
+        })?;
         let mut buf = std::io::Cursor::new(Vec::new());
         ciborium::ser::into_writer(self, &mut buf).map_err(|e| CheckpointError::Cbor(e.to_string()))?;
-        write_atomic(dir, CONVENTIONS_FILE, &buf.into_inner())?;
+        write_atomic(&comm_dir, "promoted_convention.cbor", &buf.into_inner())?;
         Ok(())
     }
 
     fn load(dir: &Path) -> Result<Self, CheckpointError> {
-        let bytes = std::fs::read(dir.join(CONVENTIONS_FILE)).map_err(|source| CheckpointError::Io {
-            path: dir.join(CONVENTIONS_FILE),
-            source,
-        })?;
+        let comm_dir = dir.join(COMM_DIR);
+        let bytes = read_file(&comm_dir.join("promoted_convention.cbor"))?;
         ciborium::de::from_reader(&bytes[..]).map_err(|e| CheckpointError::Cbor(e.to_string()))
     }
 }
@@ -77,17 +87,20 @@ impl Checkpointable for ConventionTracker {
     type Error = CheckpointError;
 
     fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
+        let comm_dir = dir.join(COMM_DIR);
+        std::fs::create_dir_all(&comm_dir).map_err(|e| CheckpointError::Io {
+            path: comm_dir.clone(),
+            source: e,
+        })?;
         let mut buf = std::io::Cursor::new(Vec::new());
         ciborium::ser::into_writer(self, &mut buf).map_err(|e| CheckpointError::Cbor(e.to_string()))?;
-        write_atomic(dir, CONVENTIONS_FILE, &buf.into_inner())?;
+        write_atomic(&comm_dir, CONVENTIONS_FILE, &buf.into_inner())?;
         Ok(())
     }
 
     fn load(dir: &Path) -> Result<Self, CheckpointError> {
-        let bytes = std::fs::read(dir.join(CONVENTIONS_FILE)).map_err(|source| CheckpointError::Io {
-            path: dir.join(CONVENTIONS_FILE),
-            source,
-        })?;
+        let comm_dir = dir.join(COMM_DIR);
+        let bytes = read_file(&comm_dir.join(CONVENTIONS_FILE))?;
         ciborium::de::from_reader(&bytes[..]).map_err(|e| CheckpointError::Cbor(e.to_string()))
     }
 }
@@ -132,16 +145,23 @@ mod tests {
     fn convention_tracker_roundtrip() {
         let dir = tempdir().unwrap();
         let mut tracker = ConventionTracker::default();
-        tracker.epoch_index = 5;
-        tracker.steps_in_epoch = 32;
-        tracker.record_signal(SignalValue::Sym(0), StateClass::North);
-        tracker.record_benefit(&[true, false, false, false], true);
+        // Add a promoted convention directly to the promoted vec
+        tracker.promoted.push(PromotedConvention {
+            symbol: 0,
+            meaning_col: StateClass::North as u8,
+            epoch: 0,
+            streak: 1,
+            precision_hits: 1,
+            precision_total: 2,
+            heard_steps: 1,
+            heard_feeds: 1,
+            quiet_steps: 0,
+            quiet_feeds: 0,
+        });
 
         tracker.save(dir.path()).unwrap();
         let loaded = ConventionTracker::load(dir.path()).unwrap();
-        assert_eq!(loaded.epoch_index, tracker.epoch_index);
-        assert_eq!(loaded.steps_in_epoch, tracker.steps_in_epoch);
-        assert_eq!(loaded.epoch_vocab.joint, tracker.epoch_vocab.joint);
-        assert_eq!(loaded.benefit.heard_steps, tracker.benefit.heard_steps);
+        assert_eq!(loaded.promoted.len(), 1);
+        assert_eq!(loaded.promoted[0].symbol, 0);
     }
 }

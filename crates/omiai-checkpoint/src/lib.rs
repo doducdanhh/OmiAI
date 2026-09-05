@@ -20,13 +20,15 @@ pub mod legacy;
 pub mod manifest;
 pub mod retention;
 pub mod traits;
-mod world_bundle;
+pub mod world_bundle;
 
 pub use error::CheckpointError;
 pub use retention::{apply_retention, RetentionPolicy};
-pub use fsutil::{hash_file, write_atomic};
-pub use manifest::{FileRecord, Manifest};
+pub use fsutil::{hash_file, write_atomic, read_file};
+pub use manifest::{FileRecord, Manifest, FORMAT_VERSION_V1};
 pub use traits::Checkpointable;
+pub use omiai_world::WorldConfig;
+pub use world_bundle::{GraphFile, restore_rng, AtomsFile, RegistryFile, KNOWLEDGE_DIR, GRAPH_FILE, COMM_DIR, CONVENTIONS_FILE};
 
 use std::path::Path;
 

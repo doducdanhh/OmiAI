@@ -3,6 +3,7 @@
 //! deterministic; mỗi phase là hàm riêng test được độc lập.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use omiai_core::ltl::LtlFormula;
 use omiai_evolution::ltl_formula_gp::{LtlFormulaGpConfig, LtlFormulaMutator};
@@ -14,8 +15,10 @@ use crate::atoms::Atom;
 use crate::communication::{self, ConventionTracker, PromotedConvention, Symbol, Vocabulary};
 use crate::ecology::MUTATION_PROB;
 use crate::registry::{FormulaId, FormulaRegistry, Genome};
-use crate::substrate::CellularAutomaton;
+use crate::substrate::{CellularAutomaton, decode_ca, encode_ca};
 use omiai_knowledge::graph::{Concept, KnowledgeGraph};
+use ciborium::de::from_reader;
+use serde::{Deserialize, Serialize};
 
 /// Genome mặc định cho atom mồi: tìm tài nguyên hoặc ô trống.
 fn default_genome_formula() -> LtlFormula {
@@ -44,7 +47,7 @@ impl Default for WorldConfig {
 }
 
 /// Thế giới: lưới CA + registry genome + các atom + RNG deterministic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct World {
     pub ca: CellularAutomaton,
     pub registry: FormulaRegistry,
@@ -353,6 +356,138 @@ impl World {
     /// Phase 8: đóng băng bước.
     pub fn snapshot(&mut self) {
         self.step_count += 1;
+    }
+
+    /// Load world from a snapshot directory (for omiai-runtime)
+    /// Expects world_snapshot/ with grid.bin, agents.cbor, vocabulary.cbor, registry.cbor, rng_state.bin, airwave.cbor
+    pub fn load_snapshot(snapshot_dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        use crate::substrate::CellularAutomaton;
+        use crate::communication::{ConventionTracker, Vocabulary};
+        use crate::registry::{FormulaRegistry, Genome};
+        use crate::atoms::Atom;
+        use crate::communication::Symbol;
+        use omiai_knowledge::graph::{KnowledgeGraph, Concept};
+        use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
+        use ciborium::de::from_reader;
+        use std::fs;
+
+        // Helper to read file
+        let read_file = |path: &Path| -> Result<Vec<u8>, std::io::Error> {
+            fs::read(path)
+        };
+
+        // Verify and load grid.bin
+        let grid_path = snapshot_dir.join("grid.bin");
+        let grid_bytes = read_file(&grid_path)?;
+        let ca = decode_ca(&grid_bytes)?;
+
+        // Load agents.cbor (atoms)
+        let atoms_path = snapshot_dir.join("agents.cbor");
+        let atoms_bytes = read_file(&atoms_path)?;
+        #[derive(Debug, Serialize, Deserialize)]
+        struct AtomsFile {
+            step_count: u64,
+            atoms: Vec<Atom>,
+        }
+        let atoms_file: AtomsFile = from_reader(&atoms_bytes[..])?;
+
+        // Load registry.cbor
+        let registry_path = snapshot_dir.join("registry.cbor");
+        let registry_bytes = read_file(&registry_path)?;
+        #[derive(Debug, Serialize, Deserialize)]
+        struct RegistryFile {
+            genomes: Vec<Genome>,
+        }
+        let registry_file: RegistryFile = from_reader(&registry_bytes[..])?;
+
+        // Load rng_state.bin
+        let rng_path = snapshot_dir.join("rng_state.bin");
+        let rng_bytes = read_file(&rng_path)?;
+        if rng_bytes.len() != 32 {
+            return Err("Invalid RNG state file length".into());
+        }
+        let seed = u64::from_le_bytes(rng_bytes[0..8].try_into()?);
+        let stream = u64::from_le_bytes(rng_bytes[8..16].try_into()?);
+        let word_pos = u128::from_le_bytes(rng_bytes[16..32].try_into()?);
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        rng.set_stream(stream);
+        rng.set_word_pos(word_pos);
+
+        // Load airwave.cbor
+        let airwave_path = snapshot_dir.join("airwave.cbor");
+        let airwave_bytes = read_file(&airwave_path)?;
+        let airwave: Vec<Option<u8>> = from_reader(&airwave_bytes[..])?;
+
+        // Load vocabulary.cbor
+        let vocab_path = snapshot_dir.join("vocabulary.cbor");
+        let vocab_bytes = read_file(&vocab_path)?;
+        let vocabulary: Vocabulary = from_reader(&vocab_bytes[..])?;
+
+        // Load conventions.cbor (optional)
+        let conventions_path = snapshot_dir.join("conventions.cbor");
+        let conventions = if conventions_path.exists() {
+            let conv_bytes = read_file(&conventions_path)?;
+            from_reader(&conv_bytes[..])?
+        } else {
+            ConventionTracker::default()
+        };
+
+        // Load knowledge_graph/graph.cbor (optional)
+        let knowledge = if snapshot_dir.join("knowledge_graph").join("graph.cbor").exists() {
+            let kg_path = snapshot_dir.join("knowledge_graph").join("graph.cbor");
+            let kg_bytes = read_file(&kg_path)?;
+            #[derive(Debug, Serialize, Deserialize)]
+            struct GraphFile {
+                concepts: Vec<Concept>,
+                relations: Vec<(String, String, String)>,
+            }
+            let graph_file: GraphFile = from_reader(&kg_bytes[..])?;
+            let mut graph = KnowledgeGraph::new();
+            for concept in graph_file.concepts {
+                let id = concept.id.clone();
+                if !graph.add_concept(concept) {
+                    return Err(format!("Duplicate concept id: {id}").into());
+                }
+            }
+            for (from, to, kind) in graph_file.relations {
+                graph.add_relation(&from, &to, kind)?;
+            }
+            graph
+        } else {
+            KnowledgeGraph::new()
+        };
+
+        let n_cells = ca.width * ca.height;
+
+        // Validate airwave length
+        if airwave.len() != n_cells {
+            return Err("Airwave length mismatch".into());
+        }
+
+        // Validate atoms
+        let n_genomes = registry_file.genomes.len();
+        for atom in &atoms_file.atoms {
+            if atom.pos.0 >= ca.width || atom.pos.1 >= ca.height {
+                return Err("Atom position out of bounds".into());
+            }
+            if (atom.gene.slot() as usize) >= n_genomes {
+                return Err("Atom gene slot out of bounds".into());
+            }
+        }
+
+        Ok(World {
+            ca,
+            registry: FormulaRegistry::from_genomes_in_order(registry_file.genomes),
+            atoms: atoms_file.atoms,
+            rng,
+            rng_seed: seed,
+            rng_stream: stream,
+            step_count: atoms_file.step_count,
+            airwave: airwave.into_iter().map(|opt| opt.map(|s| s as Symbol)).collect(),
+            vocabulary,
+            conventions,
+            knowledge,
+        })
     }
 }
 

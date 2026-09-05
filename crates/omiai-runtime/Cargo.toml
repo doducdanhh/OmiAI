@@ -4,8 +4,40 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Minimal load-and-infer runtime for exported bundles. Must stay free of training/evolution code; compiles as lib, cdylib (FFI), and WASM targets in later slices."
+description = "Minimal load-and-infer runtime for exported bundles. Must stay free of training/evolution code; compiles as lib, cdylib (FFI), and WASM targets."
+
+[lib]
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+omiai-core = { path = "../omiai-core" }
+omiai-knowledge = { path = "../omiai-knowledge" }
+omiai-probabilistic = { path = "../omiai-probabilistic" }
+omiai-causal = { path = "../omiai-causal" }
+omiai-neuro = { path = "../omiai-neuro" }
+omiai-world = { path = "../omiai-world" }
+omiai-io = { path = "../omiai-io" }
+omiai-checkpoint = { path = "../omiai-checkpoint" }
 serde.workspace = true
 serde_json.workspace = true
+ciborium.workspace = true
+blake3.workspace = true
+tar = "0.4"
+zstd = "0.13"
+tempfile = "3.10"
+thiserror.workspace = true
+anyhow.workspace = true
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+[features]
+default = []
+ffi = []
+
+[dev-dependencies]
+proptest.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# wasm32-specific deps if needed
+getrandom = { version = "0.2", features = ["js"] }

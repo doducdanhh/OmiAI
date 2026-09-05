@@ -8,6 +8,7 @@ description = "Causal reasoning: SCM, do-calculus, interventions, confounding, I
 
 [dependencies]
 omiai-core = { path = "../omiai-core" }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 proptest.workspace = true

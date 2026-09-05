@@ -54,7 +54,7 @@ impl<'de> Deserialize<'de> for FormulaId {
 }
 
 /// Kho genome dùng chung.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FormulaRegistry {
     arena: Arena<Genome>,
 }

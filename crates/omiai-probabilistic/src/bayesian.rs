@@ -2,9 +2,10 @@
 //! approximate inference via Metropolis–Hastings MCMC.
 
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 /// Conditional probability table for a discrete node.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cpt {
     pub variable: String,
     pub parents: Vec<String>,
@@ -14,7 +15,7 @@ pub struct Cpt {
 }
 
 /// Discrete Bayesian network (Bernoulli variables for simplicity).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BayesianNetwork {
     pub nodes: Vec<Cpt>,
 }

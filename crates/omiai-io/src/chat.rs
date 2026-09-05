@@ -1,13 +1,15 @@
 //! Multilingual chat front-end for OmiAI.
 //!
 //! This layer turns raw user text into a structured dialogue turn, routes it
-//! through the symbolic core, and realizes an answer back into English or
+//! through all 8 reasoning pillars (core, knowledge, probabilistic, causal,
+//! neuro, world, evolution, meta), and realizes an answer back into English or
 //! Vietnamese without replacing the reasoning engine.
 
 use omiai_core::inference::ProofResult;
 use omiai_core::logic_engine::{Formula, Term};
 use omiai_core::prover::TheoremProver;
 use crate::conversation::ConversationMemory;
+use crate::dialogue_router::{DialogueRouter, ReasoningResult};
 
 use super::action::Action;
 use super::nlp_parser::{DetectedLanguage, NlpParser, ParseIntent};
@@ -30,10 +32,11 @@ pub struct ChatResponse {
 }
 
 /// High-level chat engine.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ChatEngine {
     parser: NlpParser,
     prover: TheoremProver,
+    router: DialogueRouter,
 }
 
 impl Default for ChatEngine {
@@ -48,11 +51,17 @@ impl ChatEngine {
         Self {
             parser: NlpParser::default(),
             prover: TheoremProver::new(),
+            router: DialogueRouter::new(),
         }
     }
 
+    /// Replace the dialogue router (used when loading from checkpoint).
+    pub fn set_router(&mut self, router: DialogueRouter) {
+        self.router = router;
+    }
+
     /// Handle a request, updating memory and returning a natural-language reply.
-    pub fn handle(&self, request: &ChatRequest, memory: &mut ConversationMemory) -> ChatResponse {
+    pub fn handle(&mut self, request: &ChatRequest, memory: &mut ConversationMemory) -> ChatResponse {
         let detected = request
             .preferred_language
             .or_else(|| self.parser.detect_language(&request.text));
@@ -61,118 +70,74 @@ impl ChatEngine {
 
         memory.push_user(&request.text, lang);
 
-        let (intent, reply, proven) = match parsed {
+        let (intent, reply, reasoning_result) = match parsed {
             Ok(message) => self.respond_to_message(message, memory),
             Err(err) => {
                 let text = self.parser.realize_error(&err, lang);
-                (ParseIntent::Clarify, text, false)
+                (ParseIntent::Clarify, text, ReasoningResult::NoAnswer)
             }
         };
 
         memory.push_assistant(&reply, lang);
+        let (proven, confidence) = self.assess_confidence(&reasoning_result);
         ChatResponse {
             language: lang,
             text: reply,
             intent,
             proven,
-            confidence: if proven { 100 } else { 35 },
+            confidence,
         }
     }
 
     fn respond_to_message(
-        &self,
+        &mut self,
         message: super::nlp_parser::ParsedMessage,
         memory: &mut ConversationMemory,
-    ) -> (ParseIntent, String, bool) {
-        match message.intent {
-            ParseIntent::Assert => {
-                if let Some(formula) = message.formula {
-                    if let Formula::Atom(_, args) = &formula
-                        && let Some(Term::Const(entity)) = args.first() {
-                            memory.focus_entity(entity.clone());
-                        }
-                    memory.push_fact(formula.clone());
-                    (
-                        ParseIntent::Assert,
-                        self.parser.realize_assertion(&formula, message.language),
-                        true,
-                    )
-                } else {
-                    (
-                        ParseIntent::Clarify,
-                        self.parser.realize_clarification(message.language),
-                        false,
-                    )
-                }
-            }
-            ParseIntent::Ask => {
-                if let Some(query) = message.query {
-                    let proof = self.answer_query(&query, memory);
-                    match proof {
-                        Some((formula, proof)) => (
-                            ParseIntent::Ask,
-                            self.parser
-                                .realize_answer(&formula, &proof, message.language),
-                            true,
-                        ),
-                        None => (
-                            ParseIntent::Clarify,
-                            self.parser.realize_no_answer(message.language),
-                            false,
-                        ),
+    ) -> (ParseIntent, String, ReasoningResult) {
+        let facts = memory.facts();
+        let query_type = message.query_type;
+        let routing_result = self.router.route(
+            &message.intent,
+            message.formula.as_ref(),
+            message.query.as_ref(),
+            &facts,
+            query_type,
+        );
+
+        // Also store assertion in memory if it's an Assert
+        if matches!(message.intent, ParseIntent::Assert) {
+            if let Some(formula) = &message.formula {
+                if let Formula::Atom(_, args) = formula
+                    && let Some(Term::Const(entity)) = args.first() {
+                        memory.focus_entity(entity.clone());
                     }
-                } else {
-                    (
-                        ParseIntent::Clarify,
-                        self.parser.realize_clarification(message.language),
-                        false,
-                    )
-                }
+                memory.push_fact(formula.clone());
             }
-            ParseIntent::Request(action) => {
-                let rendered = self.parser.realize_action(&action, message.language);
-                (ParseIntent::Request(action), rendered, false)
-            }
-            ParseIntent::Greeting => (
-                ParseIntent::Greeting,
-                self.parser.realize_greeting(message.language),
-                false,
-            ),
-            ParseIntent::Explain => (
-                ParseIntent::Explain,
-                self.parser.realize_explanation_prompt(message.language),
-                false,
-            ),
-            ParseIntent::Clarify => (
-                ParseIntent::Clarify,
-                self.parser.realize_clarification(message.language),
-                false,
-            ),
-            ParseIntent::SmallTalk => (
-                ParseIntent::SmallTalk,
-                self.parser.realize_small_talk(message.language),
-                false,
-            ),
         }
+
+        let reply = self.parser.realize_reasoning_result(&routing_result, message.language);
+        (message.intent, reply, routing_result)
     }
 
-    fn answer_query(
-        &self,
-        query: &Formula,
-        memory: &ConversationMemory,
-    ) -> Option<(Formula, ProofResult)> {
-        let premises = memory.facts();
-        let proof = self.prover.prove(&premises, query);
-        if matches!(proof, ProofResult::Proved { .. }) {
-            return Some((query.clone(), proof));
-        }
-
-        let negated = Formula::Not(Box::new(query.clone()));
-        let negative_proof = self.prover.prove(&premises, &negated);
-        if matches!(negative_proof, ProofResult::Proved { .. }) {
-            Some((negated, negative_proof))
-        } else {
-            None
+    fn assess_confidence(&self, result: &ReasoningResult) -> (bool, u8) {
+        match result {
+            ReasoningResult::LogicalProof { proof, .. } => {
+                let proven = matches!(proof, ProofResult::Proved { .. });
+                (proven, if proven { 100 } else { 35 })
+            }
+            ReasoningResult::Probabilistic { probability, .. } => {
+                // Confidence based on how far from 0.5
+                let conf = ((probability - 0.5).abs() * 200.0) as u8;
+                (false, conf.clamp(10, 90))
+            }
+            ReasoningResult::Causal { explanation, .. } => {
+                (explanation.is_causal, if explanation.is_causal { 85 } else { 40 })
+            }
+            ReasoningResult::KnowledgeGraph { result, .. } => {
+                let has_result = !matches!(result, crate::dialogue_router::KnowledgeResult::NotFound);
+                (has_result, if has_result { 80 } else { 30 })
+            }
+            ReasoningResult::NoAnswer => (false, 10),
         }
     }
 }
@@ -215,7 +180,7 @@ mod tests {
 
     #[test]
     fn chat_engine_greets_in_english() {
-        let engine = ChatEngine::new();
+        let mut engine = ChatEngine::new();
         let mut memory = ConversationMemory::default();
         let response = engine.handle(
             &ChatRequest {

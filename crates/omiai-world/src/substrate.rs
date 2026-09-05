@@ -9,8 +9,33 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use rayon::prelude::*;
+
+/// Error type for substrate operations (local to avoid circular dependency).
+#[derive(Debug, Error)]
+pub enum SubstrateError {
+    #[error("checkpoint error: {0}")]
+    Checkpoint(String),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("CBOR encoding error: {0}")]
+    Cbor(String),
+    #[error("grid too large for checkpoint format: {path:?}")]
+    GridTooLarge { path: std::path::PathBuf },
+    #[error("bad magic in checkpoint file: {path:?}")]
+    BadMagic { path: std::path::PathBuf },
+    #[error("corrupt checkpoint: {path:?}: expected {expected}, got {actual}")]
+    Corrupt {
+        path: std::path::PathBuf,
+        expected: String,
+        actual: String,
+    },
+}
 
 /// 2D cellular automaton grid (row-major).
 #[derive(Debug, Clone)]
@@ -196,6 +221,73 @@ fn rotate_block(b: [u8; 4], _num_states: u8) -> [u8; 4] {
 
 fn pack_block(b: [u8; 4]) -> u32 {
     ((b[0] as u32) << 24) | ((b[1] as u32) << 16) | ((b[2] as u32) << 8) | (b[3] as u32)
+}
+
+/// CA grid binary format constants (matching checkpoint-v1 spec)
+const MAGIC: &[u8; 10] = b"OMICAGRID\0";
+const HEADER_LEN: usize = 20;
+
+/// Serialize a CA into the `ca_grid.bin` byte layout.
+pub fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, SubstrateError> {
+    let w = ca.width;
+    let h = ca.height;
+    if w > u16::MAX as usize || h > u16::MAX as usize {
+        return Err(SubstrateError::GridTooLarge {
+            path: Path::new("grid.bin").to_path_buf(),
+        });
+    }
+    let body_len = w * h;
+    let mut out = Vec::with_capacity(HEADER_LEN + body_len);
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&(w as u16).to_le_bytes());
+    out.extend_from_slice(&(h as u16).to_le_bytes());
+    out.push(ca.num_states);
+    out.push(0u8); // flags
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved
+
+    // Row-major, one byte per cell (preserving values 0..num_states).
+    for &c in &ca.cells {
+        debug_assert!(c < ca.num_states || c == 0);
+        out.push(c);
+    }
+    // Store phase in flags byte (index 15 = after magic 10 + width 2 + height 2 + num_states 1)
+    out[15] = ca.phase();
+    Ok(out)
+}
+
+/// Reconstruct a CA from `ca_grid.bin` bytes.
+pub fn decode_ca(bytes: &[u8]) -> Result<CellularAutomaton, SubstrateError> {
+    let path = Path::new("grid.bin").to_path_buf();
+    if bytes.len() < HEADER_LEN || &bytes[..10] != MAGIC {
+        return Err(SubstrateError::BadMagic { path });
+    }
+    let w = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
+    let h = u16::from_le_bytes([bytes[12], bytes[13]]) as usize;
+    let num_states = bytes[14];
+    let body = &bytes[HEADER_LEN..];
+    let expected_len = w * h;
+    if body.len() != expected_len {
+        return Err(SubstrateError::Corrupt {
+            path,
+            expected: format!("body len {expected_len}"),
+            actual: format!("body len {}", body.len()),
+        });
+    }
+    // `phase` and `block_cache` are private simulation bookkeeping;
+    // reconstruct via the public constructor, then restore the decoded
+    // cells directly (the public `set` clamps values into
+    // `0..num_states`, which would corrupt resource states 2/3).
+    if body.iter().any(|&c| c >= num_states && num_states > 0) {
+        return Err(SubstrateError::Corrupt {
+            path,
+            expected: format!("cells in 0..{num_states}"),
+            actual: "cell value out of range".to_string(),
+        });
+    }
+    let mut ca = CellularAutomaton::new(w, h, num_states);
+    ca.cells = body.to_vec();
+    ca.set_phase(bytes[15]); // flags byte stores phase in bit 0
+    Ok(ca)
 }
 
 #[cfg(test)]

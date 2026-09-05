@@ -28,10 +28,10 @@
 
 use std::path::Path;
 
-use omiai_world::substrate::CellularAutomaton;
+use serde::{Deserialize, Serialize};
 
 use crate::error::CheckpointError;
-use crate::fsutil::{hash_file, write_atomic};
+use crate::fsutil::{hash_file, write_atomic, read_file};
 use crate::manifest::{FileRecord, Manifest};
 use crate::traits::Checkpointable;
 
@@ -40,62 +40,113 @@ const MAGIC: &[u8; 10] = b"OMICAGRID\0";
 const HEADER_LEN: usize = 20;
 const GRID_FILE: &str = "grid.bin";
 
-impl Checkpointable for CellularAutomaton {
-    type Error = CheckpointError;
+/// Cellular Automaton grid state (minimal subset needed for checkpointing)
+/// This mirrors the persistent state subset of `omiai_world::CellularAutomaton`.
+#[derive(Debug, Clone)]
+pub struct CellularAutomaton {
+    pub width: usize,
+    pub height: usize,
+    /// Cell states in `0..num_states`
+    pub cells: Vec<u8>,
+    pub num_states: u8,
+    /// Margolus partition phase (0 or 1)
+    pub phase: u8,
+}
 
-    fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
-        let bytes = encode_ca(self)?;
-        write_atomic(dir, GRID_FILE, &bytes)?;
-        let hash = hash_file(&dir.join(GRID_FILE))?;
-        Manifest::write(
-            dir,
-            &[FileRecord {
-                path: GRID_FILE.to_string(),
-                blake3: hash,
-            }],
-        )
+impl CellularAutomaton {
+    pub fn new(width: usize, height: usize, num_states: u8) -> Self {
+        Self {
+            width,
+            height,
+            cells: vec![0; width * height],
+            num_states,
+            phase: 0,
+        }
     }
 
-    fn load(dir: &Path) -> Result<Self, CheckpointError> {
-        let manifest = Manifest::read(dir)?;
-        if manifest.format_version != crate::manifest::FORMAT_VERSION_V1 {
-            return Err(CheckpointError::MissingField(format!(
-                "unsupported format_version {}",
-                manifest.format_version
-            )));
+    pub fn random(width: usize, height: usize, density: f64, seed: u64) -> Self {
+        use rand::RngCore;
+        use rand_chacha::ChaCha8Rng;
+        use rand_chacha::rand_core::SeedableRng;
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let mut cells = Vec::with_capacity(width * height);
+        for _ in 0..width * height {
+            cells.push(if (rng.next_u32() as f64) / (u32::MAX as f64) < density { 1 } else { 0 });
         }
-        let path = dir.join(GRID_FILE);
-        let bytes = std::fs::read(&path).map_err(|source| CheckpointError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        // Verify integrity against the manifest before decoding.
-        let record = manifest
-            .files
-            .iter()
-            .find(|f| f.path == GRID_FILE)
-            .ok_or_else(|| CheckpointError::MissingField(GRID_FILE.to_string()))?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(&bytes);
-        let actual = hasher.finalize().to_hex().to_string();
-        if actual != record.blake3 {
-            return Err(CheckpointError::Corrupt {
-                path,
-                expected: record.blake3.clone(),
-                actual,
-            });
+        Self {
+            width,
+            height,
+            cells,
+            num_states: 2,
+            phase: 0,
         }
-        decode_ca(&bytes)
+    }
+
+    pub fn population(&self) -> usize {
+        self.cells.iter().filter(|&&c| c > 0).count()
+    }
+
+    pub fn step(&mut self) {
+        // Simple Margolus step (conserves population)
+        let w = self.width;
+        let h = self.height;
+        let mut new_cells = self.cells.clone();
+        for y in 0..h {
+            for x in 0..w {
+                // Margolus partition
+                let bx = (x + self.phase as usize) & !1;
+                let by = (y + self.phase as usize) & !1;
+                if bx + 1 < w && by + 1 < h {
+                    let idx00 = by * w + bx;
+                    let idx01 = by * w + bx + 1;
+                    let idx10 = (by + 1) * w + bx;
+                    let idx11 = (by + 1) * w + bx + 1;
+                    // Rotate 2x2 block
+                    let c00 = self.cells[idx00];
+                    let c01 = self.cells[idx01];
+                    let c10 = self.cells[idx10];
+                    let c11 = self.cells[idx11];
+                    new_cells[idx00] = c10;
+                    new_cells[idx01] = c00;
+                    new_cells[idx10] = c11;
+                    new_cells[idx11] = c01;
+                }
+            }
+        }
+        self.cells = new_cells;
+        self.phase ^= 1;
     }
 }
 
-/// Serialize a CA into the `ca_grid.bin` byte layout.
-pub(crate) fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
+impl From<&omiai_world::CellularAutomaton> for CellularAutomaton {
+    fn from(ca: &omiai_world::CellularAutomaton) -> Self {
+        Self {
+            width: ca.width,
+            height: ca.height,
+            cells: ca.cells.clone(),
+            num_states: ca.num_states,
+            phase: ca.phase(),
+        }
+    }
+}
+
+impl From<CellularAutomaton> for omiai_world::CellularAutomaton {
+    fn from(ca: CellularAutomaton) -> Self {
+        use std::collections::HashMap;
+        let mut ca_world = Self::new(ca.width, ca.height, ca.num_states);
+        ca_world.cells = ca.cells;
+        ca_world.set_phase(ca.phase);
+        ca_world
+    }
+}
+
+/// Encode CA into the `ca_grid.bin` byte layout.
+pub fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
     let w = ca.width;
     let h = ca.height;
     if w > u16::MAX as usize || h > u16::MAX as usize {
         return Err(CheckpointError::GridTooLarge {
-            path: Path::new(GRID_FILE).to_path_buf(),
+            path: Path::new("grid.bin").to_path_buf(),
         });
     }
     let body_len = w * h;
@@ -107,47 +158,77 @@ pub(crate) fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointErr
     out.push(0u8); // flags
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved
 
-    // Row-major, một byte mỗi cell (giữ nguyên giá trị 0..num_states).
+    // Row-major, one byte per cell (preserving values 0..num_states).
     for &c in &ca.cells {
         debug_assert!(c < ca.num_states || c == 0);
         out.push(c);
     }
     // Store phase in flags byte (index 15 = after magic 10 + width 2 + height 2 + num_states 1)
-    out[15] = ca.phase();
+    out[15] = ca.phase;
     Ok(out)
 }
 
-/// Reconstruct a CA from `ca_grid.bin` bytes.
-pub(crate) fn decode_ca(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointError> {
-    let path = Path::new(GRID_FILE).to_path_buf();
-    if bytes.len() < HEADER_LEN || &bytes[..10] != MAGIC {
-        return Err(CheckpointError::BadMagic { path });
+/// Decode CA from the `ca_grid.bin` byte layout.
+pub fn decode_ca(bytes: &[u8]) -> Result<CellularAutomaton, CheckpointError> {
+    if bytes.len() < HEADER_LEN {
+        return Err(CheckpointError::Corrupt {
+            path: Path::new("grid.bin").to_path_buf(),
+            expected: format!("at least {} bytes", HEADER_LEN),
+            actual: format!("{} bytes", bytes.len()),
+        });
+    }
+    if &bytes[0..10] != MAGIC {
+        return Err(CheckpointError::Corrupt {
+            path: Path::new("grid.bin").to_path_buf(),
+            expected: "magic OMICAGRID\\0".to_string(),
+            actual: format!("{:?}", &bytes[0..10]),
+        });
     }
     let w = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
     let h = u16::from_le_bytes([bytes[12], bytes[13]]) as usize;
     let num_states = bytes[14];
+    let flags = bytes[15];
+    let _reserved = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+
+    let expected_body = w * h;
     let body = &bytes[HEADER_LEN..];
-    let expected_len = w * h;
-    if body.len() != expected_len {
+    if body.len() != expected_body {
         return Err(CheckpointError::Corrupt {
-            path,
-            expected: format!("body len {expected_len}"),
+            path: Path::new("grid.bin").to_path_buf(),
+            expected: format!("body len {expected_body}"),
             actual: format!("body len {}", body.len()),
         });
     }
-    // `phase` and `block_cache` are private simulation bookkeeping;
-    // reconstruct via the public constructor, then restore the decoded
-    // cells directly (the public `set` clamps values into
-    // `0..num_states`, which would corrupt resource states 2/3).
+    // Validate cells are in range
     if body.iter().any(|&c| c >= num_states && num_states > 0) {
         return Err(CheckpointError::Corrupt {
-            path,
+            path: Path::new("grid.bin").to_path_buf(),
             expected: format!("cells in 0..{num_states}"),
             actual: "cell value out of range".to_string(),
         });
     }
-    let mut ca = CellularAutomaton::new(w, h, num_states);
-    ca.cells = body.to_vec();
-    ca.set_phase(bytes[15]); // flags byte stores phase in bit 0 (index 15 = magic 10 + width 2 + height 2 + num_states 1 + flags 1 = 16 bytes header? Wait: MAGIC 10 + width 2 + height 2 + num_states 1 = 15, so flags is index 15)
+    let mut ca = CellularAutomaton {
+        width: w,
+        height: h,
+        cells: body.to_vec(),
+        num_states,
+        phase: flags,
+    };
     Ok(ca)
+}
+
+impl Checkpointable for CellularAutomaton {
+    type Error = CheckpointError;
+
+    fn save(&self, dir: &Path) -> Result<(), CheckpointError> {
+        let bytes = encode_ca(self)?;
+        write_atomic(dir, GRID_FILE, &bytes)?;
+        Ok(())
+    }
+
+    fn load(dir: &Path) -> Result<Self, CheckpointError> {
+        let grid_path = dir.join(GRID_FILE);
+        let bytes = read_file(&grid_path)?;
+        decode_ca(&bytes)
+    }
 }

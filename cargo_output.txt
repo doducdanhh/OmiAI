@@ -1,0 +1,412 @@
+﻿cargo : warning: unused imports: `Deserialize` and `Serialize`
+At line:1 char:354
++ ... ktop\OmiAI; cargo check -p omiai-checkpoint 2>&1 > cargo_output.txt;  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused...and `Serialize`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  --> crates\omiai-world\src\substrate.rs:14:13
+   |
+14 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^  ^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `encode_ca`
+  --> crates\omiai-world\src\world_loop.rs:18:54
+   |
+18 | use crate::substrate::{CellularAutomaton, decode_ca, encode_ca};
+   |                                                      ^^^^^^^^^
+
+warning: unused import: `ciborium::de::from_reader`
+  --> crates\omiai-world\src\world_loop.rs:20:5
+   |
+20 | use ciborium::de::from_reader;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::substrate::CellularAutomaton`
+   --> crates\omiai-world\src\world_loop.rs:364:13
+    |
+364 |         use crate::substrate::CellularAutomaton;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `omiai-world` (lib) generated 4 warnings (run `cargo fix --lib -p omiai-world` to apply 4 suggestions)
+    Checking omiai-checkpoint v0.1.0 (C:\Users\doduc\OneDrive\Desktop\OmiAI\crates\omiai-checkpoint)
+warning: unused imports: `Deserialize` and `Serialize`
+  --> crates\omiai-checkpoint\src\ca_grid.rs:31:13
+   |
+31 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^  ^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `FileRecord`
+  --> crates\omiai-checkpoint\src\ca_grid.rs:35:23
+   |
+35 | use crate::manifest::{FileRecord, Manifest};
+   |                       ^^^^^^^^^^
+
+warning: unused imports: `N_SIGNAL_VALUES`, `N_STATE_CLASSES`, `N_SYMBOLS`, `SignalValue`, `StateClass`, and `Symbol`
+  --> crates\omiai-checkpoint\src\communication.rs:11:5
+   |
+11 |     N_SYMBOLS, N_STATE_CLASSES, N_SIGNAL_VALUES, Symbol, StateClass, SignalValue
+   |     ^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+  --> crates\omiai-checkpoint\src\communication.rs:13:13
+   |
+13 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeMap`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:23:5
+   |
+23 | use std::collections::BTreeMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FormulaId` and `WorldConfig`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:28:12
+   |
+28 |     World, WorldConfig,
+   |            ^^^^^^^^^^^
+29 |     atoms::Atom,
+30 |     registry::{FormulaRegistry, Genome, FormulaId},
+   |                                         ^^^^^^^^^
+
+warning: unused import: `crate::ca_grid::CellularAutomaton`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:32:5
+   |
+32 | use crate::ca_grid::CellularAutomaton;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `N_STATE_CLASSES` and `N_SYMBOLS`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:33:34
+   |
+33 | use omiai_world::communication::{N_SYMBOLS, N_STATE_CLASSES};
+   |                                  ^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `read_file as fs_read_file`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:39:46
+   |
+39 | use crate::fsutil::{hash_file, write_atomic, read_file as fs_read_file};
+   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:162:36
+    |
+162 |         let grid_bytes = encode_ca(&self.ca)?;
+    |                          --------- ^^^^^^^^ expected `ca_grid::CellularAutomaton`, found `CellularAutomaton`
+    |                          |
+    |                          arguments to this function are incorrect
+    |
+    = note: `CellularAutomaton` and `ca_grid::CellularAutomaton` have similar names, but are actually distinct types
+note: `CellularAutomaton` is defined in crate `omiai_world`
+   --> crates\omiai-world\src\substrate.rs:42:1
+    |
+ 42 | pub struct CellularAutomaton {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `ca_grid::CellularAutomaton` is defined in the current crate
+   --> crates\omiai-checkpoint\src\ca_grid.rs:45:1
+    |
+ 45 | pub struct CellularAutomaton {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: function defined here
+   --> crates\omiai-checkpoint\src\ca_grid.rs:56:8
+    |
+ 56 | pub fn encode_ca(ca: &CellularAutomaton) -> Result<Vec<u8>, CheckpointError> {
+    |        ^^^^^^^^^ ----------------------
+
+error[E0599]: no associated function or constant named `new` found for struct `Manifest` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:201:38
+    |
+201 |         let mut manifest = Manifest::new();
+    |                                      ^^^ associated function or constant not found in `Manifest`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:21:1
+    |
+ 21 | pub struct Manifest {
+    | ------------------- associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `Manifest`, consider using `Manifest::read` which returns `Result<Manifest, CheckpointError>`
+   --> crates\omiai-checkpoint\src\manifest.rs:59:5
+    |
+ 59 |     pub fn read(dir: &Path) -> Result<Manifest, CheckpointError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:202:34
+    |
+202 |         manifest.add(FileRecord::new(GRID_FILE, hash_file(&world_dir.join(GRID_FILE))?));
+    |                                  ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:203:34
+    |
+203 |         manifest.add(FileRecord::new(ATOMS_FILE, hash_file(&world_dir.join(ATOMS_FILE))?));
+    |                                  ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:204:34
+    |
+204 |         manifest.add(FileRecord::new(REGISTRY_FILE, hash_file(&world_dir.join(REGISTRY_FILE))?));
+    |                                  ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:205:34
+    |
+205 |         manifest.add(FileRecord::new(RNG_FILE, hash_file(&world_dir.join(RNG_FILE))?));
+    |                                  ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:206:34
+    |
+206 |         manifest.add(FileRecord::new(AIRWAVE_FILE, hash_file(&world_dir.join(AIRWAVE_FILE))?));
+    |                                  ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:207:34
+    |
+207 |         manifest.add(FileRecord::new(VOCABULARY_FILE, hash_file(&world_dir.join(VOCABULARY_FILE))?));
+    |                                  ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:209:38
+    |
+209 |             manifest.add(FileRecord::new(
+    |                                      ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `FileRecord` in the current scope
+   --> crates\omiai-checkpoint\src\world_bundle.rs:215:38
+    |
+215 |             manifest.add(FileRecord::new(
+    |                                      ^^^ associated function or constant not found in `FileRecord`
+    |
+   ::: crates\omiai-checkpoint\src\manifest.rs:12:1
+    |
+ 12 | pub struct FileRecord {
+    | --------------------- associated function or constant `new` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `petgraph::graph_impl::IndexType`
+            candidate #2: `petgraph::matrix_graph::Nullable`
+            candidate #3: `rand::distributions::uniform::UniformSampler`
+help: there is a method `ne` with a similar name, but with different arguments
+   --> C:\Users\doduc\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib/rustlib/src/rust\library\core\src\cmp.rs:263:5
+    |
+263 |     fn ne(&self, other: &Rhs) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:231:13
+    |
+231 |             source,
+    |             ^^^^^^ expected `Error`, found `CheckpointError`
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:238:13
+    |
+238 |             source,
+    |             ^^^^^^ expected `Error`, found `CheckpointError`
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:247:13
+    |
+247 |             source,
+    |             ^^^^^^ expected `Error`, found `CheckpointError`
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:255:13
+    |
+255 |             source,
+    |             ^^^^^^ expected `Error`, found `CheckpointError`
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:277:13
+    |
+277 |             source,
+    |             ^^^^^^ expected `Error`, found `CheckpointError`
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:284:13
+    |
+284 |             source,
+    |             ^^^^^^ expected `Error`, found `CheckpointError`
+
+error[E0308]: mismatched types
+   --> crates\omiai-checkpoint\src\world_bundle.rs:336:13
+    |
+336 |             ca,
+    |             ^^ expected `CellularAutomaton`, found `ca_grid::CellularAutomaton`
+    |
+    = note: `ca_grid::CellularAutomaton` and `CellularAutomaton` have similar names, but are actually distinct types
+note: `ca_grid::CellularAutomaton` is defined in the current crate
+   --> crates\omiai-checkpoint\src\ca_grid.rs:45:1
+    |
+ 45 | pub struct CellularAutomaton {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `CellularAutomaton` is defined in crate `omiai_world`
+   --> crates\omiai-world\src\substrate.rs:42:1
+    |
+ 42 | pub struct CellularAutomaton {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> crates\omiai-checkpoint\src\ca_grid.rs:122:9
+    |
+122 |     let mut ca = CellularAutomaton {
+    |         ----^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> crates\omiai-checkpoint\src\world_bundle.rs:87:13
+   |
+87 |         let mut graph = KnowledgeGraph::new();
+   |             ----^^^^^
+   |             |
+   |             help: remove this `mut`
+
+warning: unused variable: `subject`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:92:14
+   |
+92 |         for (subject, predicate, object) in self.relations {
+   |              ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_subject`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `predicate`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:92:23
+   |
+92 |         for (subject, predicate, object) in self.relations {
+   |                       ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_predicate`
+
+warning: unused variable: `object`
+  --> crates\omiai-checkpoint\src\world_bundle.rs:92:34
+   |
+92 |         for (subject, predicate, object) in self.relations {
+   |                                  ^^^^^^ help: if this is intentional, prefix it with an underscore: `_object`
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+warning: `omiai-checkpoint` (lib) generated 14 warnings
+error: could not compile `omiai-checkpoint` (lib) due to 17 previous errors; 14 warnings emitted

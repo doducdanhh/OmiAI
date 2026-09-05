@@ -8,17 +8,15 @@ description = "Dialogue front-end: NLP parser, tokenizer, perception, actions, c
 
 [dependencies]
 omiai-core = { path = "../omiai-core" }
+omiai-knowledge = { path = "../omiai-knowledge" }
+omiai-probabilistic = { path = "../omiai-probabilistic" }
+omiai-causal = { path = "../omiai-causal" }
+omiai-neuro = { path = "../omiai-neuro" }
+omiai-world = { path = "../omiai-world" }
 serde.workspace = true
 nom.workspace = true
 
 [dev-dependencies]
-omiai-world = { path = "../omiai-world" }
-
 omiai-evolution = { path = "../omiai-evolution" }
 omiai-meta = { path = "../omiai-meta" }
-omiai-neuro = { path = "../omiai-neuro" }
-omiai-probabilistic = { path = "../omiai-probabilistic" }
-
-omiai-causal = { path = "../omiai-causal" }
-omiai-knowledge = { path = "../omiai-knowledge" }
 proptest.workspace = true

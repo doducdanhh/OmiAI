@@ -2,9 +2,10 @@
 //! d-separation (Pearl).
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use serde::{Serialize, Deserialize};
 
 /// Causal DAG over named variables.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CausalDag {
     /// adjacency: parent → children
     pub children: HashMap<String, Vec<String>>,

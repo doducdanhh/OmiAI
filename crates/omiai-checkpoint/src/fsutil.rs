@@ -20,6 +20,14 @@ pub fn hash_file(path: &Path) -> Result<String, CheckpointError> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// Read a file's contents into a byte vector.
+pub fn read_file(path: &Path) -> Result<Vec<u8>, CheckpointError> {
+    fs::read(path).map_err(|source| CheckpointError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 /// Write `bytes` to `dir/name` atomically: write a hidden temp sibling,
 /// flush it to disk, rename over the target, then fsync the directory so
 /// the rename itself is durable. On success no `.tmp` residue remains.

@@ -4,8 +4,23 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Inference bundle packaging: single model.omiai archive (tar+zstd) with versioned manifest. Scaffold — implemented in a later slice."
+description = "Inference bundle packaging: single model.omiai archive (tar+zstd) with versioned manifest."
 
 [dependencies]
+omiai-checkpoint = { path = "../omiai-checkpoint" }
+omiai-core = { path = "../omiai-core" }
+omiai-knowledge = { path = "../omiai-knowledge" }
+omiai-probabilistic = { path = "../omiai-probabilistic" }
+omiai-causal = { path = "../omiai-causal" }
+omiai-neuro = { path = "../omiai-neuro" }
+omiai-world = { path = "../omiai-world" }
 serde.workspace = true
 serde_json.workspace = true
+serde_cbor = "0.11"
+ciborium = { workspace = true }
+tar = "0.4"
+zstd = "0.13"
+tempfile = "3"
+chrono = { workspace = true, features = ["serde"] }
+thiserror.workspace = true
+blake3.workspace = true

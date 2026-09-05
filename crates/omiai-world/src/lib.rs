@@ -20,3 +20,7 @@ pub mod ecology;
 pub mod registry;
 pub mod substrate;
 pub mod world_loop;
+
+pub use world_loop::World;
+pub use world_loop::WorldConfig;
+pub use substrate::CellularAutomaton;
